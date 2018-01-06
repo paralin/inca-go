@@ -29,7 +29,7 @@ func buildProcessAction(f func(goprocess.Process) error) cli.ActionFunc {
 		case <-sigs:
 		}
 
-		le.Info("waiting for processes to finish")
+		le.Info("shutting down")
 		return p.Close()
 	}
 }
