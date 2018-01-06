@@ -5,10 +5,9 @@ import (
 
 	"github.com/Sirupsen/logrus"
 	"github.com/aperturerobotics/inca-go/logctx"
+	"github.com/aperturerobotics/inca-go/shell"
 	"github.com/jbenet/goprocess"
 	// "github.com/pkg/errors"
-
-	sh "github.com/ipfs/go-ipfs-api"
 )
 
 // Node is an instance of an Inca p2p node.
@@ -16,7 +15,7 @@ type Node struct {
 	ctx context.Context
 	le  *logrus.Entry
 
-	shell  *sh.Shell
+	shell  *shell.Shell
 	proc   goprocess.Process
 	initCh chan chan error
 }
@@ -25,7 +24,7 @@ type Node struct {
 // The logger can be customized with logctx.
 func NewNode(
 	ctx context.Context,
-	ipfsShell *sh.Shell,
+	ipfsShell *shell.Shell,
 ) (*Node, error) {
 	le := logctx.GetLogEntry(ctx)
 	n := &Node{ctx: ctx, shell: ipfsShell, le: le}

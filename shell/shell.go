@@ -2,7 +2,6 @@ package shell
 
 import (
 	iobjt "github.com/aperturerobotics/inca-go/objtable"
-	"github.com/aperturerobotics/pbobject"
 	"github.com/aperturerobotics/pbobject/ipfs"
 	api "github.com/ipfs/go-ipfs-api"
 )

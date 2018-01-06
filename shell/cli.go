@@ -15,7 +15,7 @@ var cliShellArgs = struct {
 	// IpfsApi is the IPFS API endpoint.
 	IpfsApi string
 }{
-	IpfsApi: "http://127.0.0.1:8080",
+	IpfsApi: "http://127.0.0.1:5001",
 }
 
 func init() {

@@ -2,15 +2,29 @@ package objtable
 
 import (
 	"context"
+	"encoding/base64"
 
 	"github.com/aperturerobotics/objectenc"
 	"github.com/aperturerobotics/objectenc/resources"
+	"github.com/aperturerobotics/objectenc/resources/keystore"
 	"github.com/aperturerobotics/pbobject"
+	"github.com/pkg/errors"
 )
+
+var testBase64Key = "EXat7HD9lYyGpfzkmzNmkM0ij6n2+MSSjFqlReRPaOE="
+
+func getTestKey() []byte {
+	key, err := base64.StdEncoding.DecodeString(testBase64Key)
+	if err != nil {
+		panic(err)
+	}
+	return key
+}
 
 // ObjectTable is the Inca object table.
 type ObjectTable struct {
 	*pbobject.ObjectTable
+	*keystore.KeyResourceStore
 	resourceResolver ResourceResolver
 }
 
@@ -21,12 +35,14 @@ type ResourceResolver interface {
 // NewObjectTable builds a new ObjectTable.
 func NewObjectTable() *ObjectTable {
 	table := pbobject.NewObjectTable()
-	return Wrap(table)
+	ks := keystore.NewKeyResourceStore()
+	ks.AddKey(getTestKey())
+	return Wrap(table, ks)
 }
 
 // Wrap builds a ObjectTable from an existing pbobject table.
-func Wrap(table *pbobject.ObjectTable) *ObjectTable {
-	t := &ObjectTable{ObjectTable: table}
+func Wrap(table *pbobject.ObjectTable, keyStore *keystore.KeyResourceStore) *ObjectTable {
+	t := &ObjectTable{ObjectTable: table, KeyResourceStore: keyStore}
 	t.registerIncaTypes()
 	return t
 }
@@ -41,8 +57,18 @@ func (o *ObjectTable) SetResourceResolver(res ResourceResolver) {
 func (o *ObjectTable) resolveEncryptionResource(ctx context.Context, blob *objectenc.EncryptedBlob, resourceCtr interface{}) error {
 	switch resource := resourceCtr.(type) {
 	case *resources.KeyResource:
-		// mh is the key salt multihash to look up.
-		mh := resource.KeySaltMultihash
+		if resource.Encrypting {
+			resource.KeyData = getTestKey()
+			return nil
+		}
+
+		key, ok := o.KeyResourceStore.GetByMultihash(resource.KeySaltMultihash)
+		if !ok {
+			return errors.Errorf("unknown %s key: %s", resource.EncryptionType, resource.KeySaltMultihash.GetKeyMultihash().B58String())
+		}
+		resource.KeyData = key
+	default:
+		return errors.Errorf("unhandled resource: %#v", resource)
 	}
 	return nil
 }
