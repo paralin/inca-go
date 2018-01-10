@@ -6,11 +6,11 @@ import (
 	"github.com/Sirupsen/logrus"
 )
 
-var logEntryKey = &struct{}{}
+var logEntryKey = struct{ logEntryKey string }{}
 
 // GetLogEntry gets the log entry from the context or returns a default entry.
 func GetLogEntry(ctx context.Context) *logrus.Entry {
-	loggerInter := ctx.Value(logEntryKey)
+	loggerInter := ctx.Value(&logEntryKey)
 	if loggerInter != nil {
 		return loggerInter.(*logrus.Entry)
 	}
@@ -22,5 +22,5 @@ func GetLogEntry(ctx context.Context) *logrus.Entry {
 
 // WithLogEntry builds a context with a log entry.
 func WithLogEntry(ctx context.Context, le *logrus.Entry) context.Context {
-	return context.WithValue(ctx, logEntryKey, le)
+	return context.WithValue(ctx, &logEntryKey, le)
 }

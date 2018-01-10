@@ -1,9 +1,11 @@
 package main
 
 import (
-	"github.com/aperturerobotics/inca"
+	"io/ioutil"
+	"os"
+
+	"github.com/aperturerobotics/inca-go/chain"
 	"github.com/aperturerobotics/inca-go/logctx"
-	"github.com/aperturerobotics/timestamp"
 
 	"github.com/golang/protobuf/jsonpb"
 	"github.com/jbenet/goprocess"
@@ -11,50 +13,57 @@ import (
 	"github.com/urfave/cli"
 )
 
+var initChainArgs = struct {
+	// ChainID is the ID for the new chain.
+	ChainID string
+}{}
+
 func init() {
 	incaCommands = append(incaCommands, cli.Command{
 		Name:   "init",
 		Usage:  "initialize a blockchain by making the genesis block",
 		Action: buildProcessAction(cmdInitCluster),
+		Flags: []cli.Flag{
+			cli.StringFlag{
+				Name:        "chain-id",
+				Usage:       "the new chain id",
+				Value:       initChainArgs.ChainID,
+				Destination: &initChainArgs.ChainID,
+			},
+		},
 	})
 }
 
 func cmdInitCluster(p goprocess.Process) error {
+	if _, err := os.Stat(chainConfigPath); !os.IsNotExist(err) {
+		return errors.Errorf("chain config already exists: %s", chainConfigPath)
+	}
+
 	le := logctx.GetLogEntry(rootContext)
 	sh, err := GetShell()
 	if err != nil {
 		return err
 	}
 
-	genesisTs := timestamp.Now()
-	gobj := &inca.Genesis{
-		ChainId:   "test-chain-1",
-		Timestamp: &genesisTs,
-	}
-
-	tag, err := sh.AddProtobufObject(rootContext, gobj)
+	db, err := GetDb()
 	if err != nil {
 		return err
 	}
 
-	le.WithField("hash", tag).Info("successfully built genesis block")
-
-	le.Info("confirming block")
-	obj, err := sh.GetProtobufObject(rootContext, tag)
+	le.WithField("chain-id", initChainArgs.ChainID).Debug("loading blockchain")
+	ch, err := chain.NewChain(rootContext, db, sh, initChainArgs.ChainID)
 	if err != nil {
 		return err
 	}
+	le.WithField("chain-id", initChainArgs.ChainID).Info("blockchain loaded")
 
-	gout, ok := obj.(*inca.Genesis)
-	if !ok {
-		return errors.Errorf("unexpected decrypted object: %#v", obj)
-	}
+	conf := ch.GetConfig()
+	le.
+		WithField("genesis-object", conf.GetGenesisRef().GetIpfs().GetObjectHash()).
+		Info("successfully built genesis block")
 
-	jstr, err := (&jsonpb.Marshaler{}).MarshalToString(gout)
-	if err != nil {
-		return err
-	}
-	le.Infof("retrieved genesis block: %s", string(jstr))
+	dat, _ := (&jsonpb.Marshaler{Indent: "\t"}).MarshalToString(conf)
+	dat += "\n"
 
-	return nil
+	return ioutil.WriteFile(chainConfigPath, []byte(dat), 0644)
 }

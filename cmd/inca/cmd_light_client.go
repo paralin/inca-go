@@ -8,7 +8,7 @@ import (
 
 func init() {
 	incaCommands = append(incaCommands, cli.Command{
-		Name:   "light",
+		Name:   "node",
 		Usage:  "run a light node",
 		Action: buildProcessAction(cmdLightNode),
 	})
