@@ -10,7 +10,9 @@ import (
 type Db interface {
 	// Get retrieves an object from the database.
 	// Not found should return nil, nil
-	Get(ctx context.Context, key string) (pbobject.Object, error)
+	Get(ctx context.Context, key []byte) (pbobject.Object, error)
 	// Set sets an object in the database.
-	Set(ctx context.Context, key string, val pbobject.Object) error
+	Set(ctx context.Context, key []byte, val pbobject.Object) error
+	// List returns a list of keys with the specified prefix.
+	List(ctx context.Context, prefix []byte) ([][]byte, error)
 }

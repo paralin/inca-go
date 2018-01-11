@@ -24,8 +24,8 @@ type Chain struct {
 }
 
 // applyPrefix applies the chain ID prefix to the key.
-func (c *Chain) applyPrefix(key string) string {
-	return path.Join("/chain", c.genesis.GetChainId(), key)
+func (c *Chain) applyPrefix(key string) []byte {
+	return []byte(path.Join("/chain", c.genesis.GetChainId(), key))
 }
 
 // NewChain builds a new blockchain from scratch, minting a genesis block and committing it to IPFS.

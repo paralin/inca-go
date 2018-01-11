@@ -22,10 +22,10 @@ func NewBadgerDB(db *badger.DB, objectTable *objtable.ObjectTable) Db {
 
 // Get retrieves an object from the database.
 // Not found should return nil, nil
-func (d *BadgerDB) Get(ctx context.Context, key string) (pbobject.Object, error) {
+func (d *BadgerDB) Get(ctx context.Context, key []byte) (pbobject.Object, error) {
 	var objWrapper *pbobject.ObjectWrapper
 	getErr := d.View(func(txn *badger.Txn) error {
-		item, rerr := txn.Get([]byte(key))
+		item, rerr := txn.Get(key)
 		if rerr != nil {
 			if rerr == badger.ErrKeyNotFound {
 				return nil
@@ -52,7 +52,7 @@ func (d *BadgerDB) Get(ctx context.Context, key string) (pbobject.Object, error)
 }
 
 // Set sets an object in the database.
-func (d *BadgerDB) Set(ctx context.Context, key string, val pbobject.Object) error {
+func (d *BadgerDB) Set(ctx context.Context, key []byte, val pbobject.Object) error {
 	ow, err := d.table.Encode(ctx, val)
 	if err != nil {
 		return err
@@ -64,6 +64,29 @@ func (d *BadgerDB) Set(ctx context.Context, key string, val pbobject.Object) err
 	}
 
 	return d.DB.Update(func(txn *badger.Txn) error {
-		return txn.Set([]byte(key), dat)
+		return txn.Set(key, dat)
 	})
+}
+
+// List lists keys in the database.
+func (d *BadgerDB) List(ctx context.Context, prefix []byte) ([][]byte, error) {
+	var vals [][]byte
+	err := d.DB.View(func(txn *badger.Txn) error {
+		opts := badger.DefaultIteratorOptions
+		opts.PrefetchValues = false
+		it := txn.NewIterator(opts)
+		for it.Seek(prefix); it.ValidForPrefix(prefix); it.Next() {
+			item := it.Item()
+			k := item.Key()
+			kb := make([]byte, len(k))
+			copy(kb, k)
+			vals = append(vals, kb)
+		}
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+	return vals, nil
 }

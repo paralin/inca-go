@@ -1,9 +1,9 @@
 package peer
 
 import (
-	"context"
+	"fmt"
 
-	"github.com/aperturerobotics/inca-go/db"
+	dbm "github.com/aperturerobotics/inca-go/db"
 	"github.com/libp2p/go-libp2p-crypto"
 	lpeer "github.com/libp2p/go-libp2p-peer"
 )
@@ -11,16 +11,17 @@ import (
 // Peer is an observed remote node.
 type Peer struct {
 	// db is the inca database
-	db db.Db
+	db dbm.Db
 	// peerPubKey is the public key of the peer
 	peerPubKey crypto.PubKey
-	peerID lpeer.ID
+	peerID     lpeer.ID
 }
 
-// NewPeer builds a new peer object, loading known state from the DB.
-func NewPeer(ctx context.Context, db db.Db, pubKey crypto.PubKey) (*Peer, error) {
-	peerID, err := 
-	return &Peer{db: db, peerPubKey: pubKey, peerID: }
+// NewPeer builds a new peer object.
+func NewPeer(db dbm.Db, pubKey crypto.PubKey) *Peer {
+	peerID, _ := lpeer.IDFromPublicKey(pubKey)
+	db = dbm.WithPrefix(db, []byte(fmt.Sprintf("/%s", peerID.Pretty())))
+	return &Peer{db: db, peerPubKey: pubKey, peerID: peerID}
 }
 
 // GetPublicKey returns the peer public key.
