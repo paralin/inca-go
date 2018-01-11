@@ -1,14 +1,17 @@
 package main
 
 import (
+	"crypto/rand"
 	"io/ioutil"
 	"os"
 
 	"github.com/aperturerobotics/inca-go/chain"
 	"github.com/aperturerobotics/inca-go/logctx"
+	"github.com/aperturerobotics/inca-go/node"
 
 	"github.com/golang/protobuf/jsonpb"
 	"github.com/jbenet/goprocess"
+	"github.com/libp2p/go-libp2p-crypto"
 	"github.com/pkg/errors"
 	"github.com/urfave/cli"
 )
@@ -62,8 +65,32 @@ func cmdInitCluster(p goprocess.Process) error {
 		WithField("genesis-object", conf.GetGenesisRef().GetIpfs().GetObjectHash()).
 		Info("successfully built genesis block")
 
-	dat, _ := (&jsonpb.Marshaler{Indent: "\t"}).MarshalToString(conf)
+	marshaler := &jsonpb.Marshaler{Indent: "\t"}
+	dat, _ := marshaler.MarshalToString(conf)
 	dat += "\n"
 
-	return ioutil.WriteFile(chainConfigPath, []byte(dat), 0644)
+	if err := ioutil.WriteFile(chainConfigPath, []byte(dat), 0644); err != nil {
+		return err
+	}
+
+	privKey, _, err := crypto.GenerateEd25519Key(rand.Reader)
+	if err != nil {
+		return err
+	}
+
+	nodeConf := &node.Config{}
+	if err := nodeConf.SetPrivKey(privKey); err != nil {
+		return err
+	}
+
+	nodeConfStr, err := marshaler.MarshalToString(nodeConf)
+	if err != nil {
+		return err
+	}
+
+	if err := ioutil.WriteFile(nodeConfigPath, []byte(nodeConfStr), 0644); err != nil {
+		return err
+	}
+
+	return nil
 }

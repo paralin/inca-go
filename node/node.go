@@ -11,6 +11,9 @@ import (
 	"github.com/aperturerobotics/pbobject"
 	"github.com/aperturerobotics/pbobject/ipfs"
 	"github.com/jbenet/goprocess"
+
+	"github.com/libp2p/go-libp2p-crypto"
+	lpeer "github.com/libp2p/go-libp2p-peer"
 	// "github.com/pkg/errors"
 )
 
@@ -19,11 +22,13 @@ type Node struct {
 	ctx context.Context
 	le  *logrus.Entry
 
-	db     db.Db
-	shell  *shell.Shell
-	chain  *chain.Chain
-	proc   goprocess.Process
-	initCh chan chan error
+	db       db.Db
+	shell    *shell.Shell
+	chain    *chain.Chain
+	proc     goprocess.Process
+	initCh   chan chan error
+	privKey  crypto.PrivKey
+	nodeAddr lpeer.ID
 }
 
 // NewNode builds the p2p node.
@@ -33,17 +38,28 @@ func NewNode(
 	db db.Db,
 	ipfsShell *shell.Shell,
 	chain *chain.Chain,
+	config *Config,
 ) (*Node, error) {
 	le := logctx.GetLogEntry(ctx)
 
 	if pbobject.GetObjectTable(ctx) == nil {
 		ctx = pbobject.WithObjectTable(ctx, ipfsShell.ObjectTable.ObjectTable)
 	}
-	if ipfs.GetIpfsShell(ctx) == nil {
-		ctx = ipfs.WithIpfsShell(ctx, ipfsShell.FileShell)
+	if ipfs.GetObjectShell(ctx) == nil {
+		ctx = ipfs.WithObjectShell(ctx, ipfsShell.FileShell)
 	}
 
-	n := &Node{ctx: ctx, shell: ipfsShell, le: le, chain: chain, db: db}
+	privKey, err := config.UnmarshalPrivKey()
+	if err != nil {
+		return nil, err
+	}
+
+	n := &Node{ctx: ctx, shell: ipfsShell, le: le, chain: chain, db: db, privKey: privKey}
+	n.nodeAddr, err = lpeer.IDFromPrivateKey(privKey)
+	if err != nil {
+		return nil, err
+	}
+
 	n.proc = goprocess.Go(n.processNode)
 	n.initCh = make(chan chan error, 1)
 	return n, nil
@@ -56,6 +72,7 @@ func (n *Node) GetProcess() goprocess.Process {
 
 // processNode is the inner process loop for the node.
 func (n *Node) processNode(proc goprocess.Process) {
+	n.le.WithField("addr", n.nodeAddr.Pretty()).Info("node running")
 	// Sync up to latest known revision
 	for {
 		select {

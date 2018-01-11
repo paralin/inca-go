@@ -25,7 +25,7 @@ type Chain struct {
 
 // applyPrefix applies the chain ID prefix to the key.
 func (c *Chain) applyPrefix(key string) string {
-	return path.Join(c.genesis.GetChainId(), key)
+	return path.Join("/chain", c.genesis.GetChainId(), key)
 }
 
 // NewChain builds a new blockchain from scratch, minting a genesis block and committing it to IPFS.
@@ -95,4 +95,13 @@ func (c *Chain) GetConfig() *Config {
 // GetGenesis returns a copy of the genesis.
 func (c *Chain) GetGenesis() *inca.Genesis {
 	return proto.Clone(c.genesis).(*inca.Genesis)
+}
+
+// ValidateGenesisRef checks if the genesis references matches our local genesis reference.
+func (c *Chain) ValidateGenesisRef(ref *storageref.StorageRef) error {
+	if !ref.Equals(c.conf.GetGenesisRef()) {
+		return errors.Errorf("genesis references do not match: %s (expected) != %s (actual)", c.conf.GetGenesisRef(), ref)
+	}
+
+	return nil
 }

@@ -38,7 +38,8 @@ func main() {
 		if err != nil {
 			return err
 		}
-		rootContext = ipfs.WithIpfsShell(rootContext, sh.FileShell)
+
+		rootContext = ipfs.WithObjectShell(rootContext, sh.FileShell)
 		return nil
 	}
 	if err := app.Run(os.Args); err != nil {

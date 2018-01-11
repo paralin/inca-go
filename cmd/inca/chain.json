@@ -1,8 +1,0 @@
-{
-	"genesisRef": {
-		"storageType": "StorageType_IPFS",
-		"ipfs": {
-			"objectHash": "Qmb4vQAbhcCbsUMbvN2NCvQvstsw55Q9T4geMBFKk6gUkM"
-		}
-	}
-}
