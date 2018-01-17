@@ -5,8 +5,7 @@ import (
 	"path"
 
 	"github.com/aperturerobotics/inca"
-	"github.com/aperturerobotics/inca-go/objstore"
-	"github.com/aperturerobotics/inca-go/shell"
+	"github.com/aperturerobotics/objstore"
 	"github.com/aperturerobotics/pbobject"
 	"github.com/aperturerobotics/storageref"
 	"github.com/aperturerobotics/timestamp"
@@ -18,7 +17,7 @@ var genesisKey = "/genesis"
 
 // Chain is an instance of a block chain.
 type Chain struct {
-	db      objstore.ObjectStore
+	db      *objstore.ObjectStore
 	conf    *Config
 	genesis *inca.Genesis
 }
@@ -31,7 +30,7 @@ func (c *Chain) applyPrefix(key string) []byte {
 // NewChain builds a new blockchain from scratch, minting a genesis block and committing it to IPFS.
 func NewChain(
 	ctx context.Context,
-	db objstore.ObjectStore,
+	db *objstore.ObjectStore,
 	chainID string,
 ) (*Chain, error) {
 	if chainID == "" {
@@ -45,7 +44,7 @@ func NewChain(
 	}
 
 	// TODO: encryption config
-	storageRef, objData, err := db.StoreObject(ctx, genesis, pbobject.EncryptionConfig{})
+	storageRef, _, err := db.StoreObject(ctx, genesis, pbobject.EncryptionConfig{})
 	if err != nil {
 		return nil, err
 	}
@@ -60,7 +59,7 @@ func NewChain(
 // FromConfig loads a blockchain from a config.
 func FromConfig(
 	ctx context.Context,
-	db objstore.ObjectStore,
+	db *objstore.ObjectStore,
 	conf *Config,
 ) (*Chain, error) {
 	genObj, err := conf.GetGenesisRef().FollowRef(ctx)

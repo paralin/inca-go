@@ -43,18 +43,13 @@ func cmdInitCluster(p goprocess.Process) error {
 	}
 
 	le := logctx.GetLogEntry(rootContext)
-	sh, err := GetShell()
-	if err != nil {
-		return err
-	}
-
-	db, err := GetDb()
+	objStore, err := GetObjectStore()
 	if err != nil {
 		return err
 	}
 
 	le.WithField("chain-id", initChainArgs.ChainID).Debug("loading blockchain")
-	ch, err := chain.NewChain(rootContext, db, sh, initChainArgs.ChainID)
+	ch, err := chain.NewChain(rootContext, objStore, initChainArgs.ChainID)
 	if err != nil {
 		return err
 	}

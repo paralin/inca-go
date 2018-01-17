@@ -35,7 +35,12 @@ func GetNode() (*node.Node, error) {
 		return nil, err
 	}
 
-	db, err := GetDb()
+	db, err := GetObjectStore()
+	if err != nil {
+		return nil, err
+	}
+
+	dbm, err := GetDb()
 	if err != nil {
 		return nil, err
 	}
@@ -51,7 +56,7 @@ func GetNode() (*node.Node, error) {
 	}
 
 	le.Debug("loading blockchain")
-	ch, err := chain.FromConfig(rootContext, db, sh, chainConf)
+	ch, err := chain.FromConfig(rootContext, db, chainConf)
 	if err != nil {
 		return nil, err
 	}
@@ -79,7 +84,7 @@ func GetNode() (*node.Node, error) {
 		return nil, err
 	}
 
-	nod, err := node.NewNode(rootContext, db, sh, ch, nodeConf)
+	nod, err := node.NewNode(rootContext, dbm, db, sh, ch, nodeConf)
 	if err != nil {
 		return nil, err
 	}

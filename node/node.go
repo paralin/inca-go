@@ -8,8 +8,7 @@ import (
 	"github.com/aperturerobotics/inca-go/db"
 	"github.com/aperturerobotics/inca-go/logctx"
 	"github.com/aperturerobotics/inca-go/shell"
-	"github.com/aperturerobotics/pbobject"
-	"github.com/aperturerobotics/pbobject/ipfs"
+	"github.com/aperturerobotics/objstore"
 	"github.com/jbenet/goprocess"
 
 	"github.com/libp2p/go-libp2p-crypto"
@@ -23,6 +22,7 @@ type Node struct {
 	le  *logrus.Entry
 
 	db       db.Db
+	objStore *objstore.ObjectStore
 	shell    *shell.Shell
 	chain    *chain.Chain
 	proc     goprocess.Process
@@ -36,25 +36,18 @@ type Node struct {
 func NewNode(
 	ctx context.Context,
 	db db.Db,
-	ipfsShell *shell.Shell,
+	objStore *objstore.ObjectStore,
+	shell *shell.Shell,
 	chain *chain.Chain,
 	config *Config,
 ) (*Node, error) {
 	le := logctx.GetLogEntry(ctx)
-
-	if pbobject.GetObjectTable(ctx) == nil {
-		ctx = pbobject.WithObjectTable(ctx, ipfsShell.ObjectTable.ObjectTable)
-	}
-	if ipfs.GetObjectShell(ctx) == nil {
-		ctx = ipfs.WithObjectShell(ctx, ipfsShell.FileShell)
-	}
-
 	privKey, err := config.UnmarshalPrivKey()
 	if err != nil {
 		return nil, err
 	}
 
-	n := &Node{ctx: ctx, shell: ipfsShell, le: le, chain: chain, db: db, privKey: privKey}
+	n := &Node{ctx: ctx, shell: shell, le: le, chain: chain, db: db, privKey: privKey, objStore: objStore}
 	n.nodeAddr, err = lpeer.IDFromPrivateKey(privKey)
 	if err != nil {
 		return nil, err
