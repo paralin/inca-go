@@ -4,9 +4,7 @@ import (
 	"context"
 
 	"github.com/aperturerobotics/inca-go/objtable"
-	"github.com/aperturerobotics/pbobject"
 	"github.com/dgraph-io/badger"
-	"github.com/golang/protobuf/proto"
 )
 
 // BadgerDB implements Db with badger.
@@ -22,8 +20,8 @@ func NewBadgerDB(db *badger.DB, objectTable *objtable.ObjectTable) Db {
 
 // Get retrieves an object from the database.
 // Not found should return nil, nil
-func (d *BadgerDB) Get(ctx context.Context, key []byte) (pbobject.Object, error) {
-	var objWrapper *pbobject.ObjectWrapper
+func (d *BadgerDB) Get(ctx context.Context, key []byte) ([]byte, error) {
+	var objVal []byte
 	getErr := d.View(func(txn *badger.Txn) error {
 		item, rerr := txn.Get(key)
 		if rerr != nil {
@@ -38,33 +36,16 @@ func (d *BadgerDB) Get(ctx context.Context, key []byte) (pbobject.Object, error)
 			return err
 		}
 
-		objWrapper := &pbobject.ObjectWrapper{}
-		return proto.Unmarshal(val, objWrapper)
+		objVal = val
+		return nil
 	})
-	if getErr != nil {
-		return nil, getErr
-	}
-	if objWrapper == nil {
-		return nil, nil
-	}
-
-	return d.table.DecodeWrapper(ctx, objWrapper)
+	return objVal, getErr
 }
 
 // Set sets an object in the database.
-func (d *BadgerDB) Set(ctx context.Context, key []byte, val pbobject.Object) error {
-	ow, err := d.table.Encode(ctx, val)
-	if err != nil {
-		return err
-	}
-
-	dat, err := proto.Marshal(ow)
-	if err != nil {
-		return err
-	}
-
+func (d *BadgerDB) Set(ctx context.Context, key []byte, val []byte) error {
 	return d.DB.Update(func(txn *badger.Txn) error {
-		return txn.Set(key, dat)
+		return txn.Set(key, val)
 	})
 }
 

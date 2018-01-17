@@ -2,8 +2,6 @@ package db
 
 import (
 	"context"
-
-	"github.com/aperturerobotics/pbobject"
 )
 
 // dbPrefixer prefixes everything going in and out of a db.
@@ -22,12 +20,12 @@ func (d *dbPrefixer) applyPrefix(key []byte) []byte {
 
 // Get retrieves an object from the database.
 // Not found should return nil, nil
-func (d *dbPrefixer) Get(ctx context.Context, key []byte) (pbobject.Object, error) {
+func (d *dbPrefixer) Get(ctx context.Context, key []byte) ([]byte, error) {
 	return d.db.Get(ctx, d.applyPrefix(key))
 }
 
 // Set sets an object in the database.
-func (d *dbPrefixer) Set(ctx context.Context, key []byte, val pbobject.Object) error {
+func (d *dbPrefixer) Set(ctx context.Context, key []byte, val []byte) error {
 	return d.db.Set(ctx, d.applyPrefix(key), val)
 }
 

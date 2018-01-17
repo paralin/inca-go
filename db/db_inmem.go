@@ -5,13 +5,11 @@ import (
 	"context"
 	"crypto/sha1"
 	"sync"
-
-	"github.com/aperturerobotics/pbobject"
 )
 
 // inMemDb is a in-memory database.
 type inMemDb struct {
-	m  sync.Map // map[[sha1.Size]byte]pbobject.Object
+	m  sync.Map // map[[sha1.Size]byte][]byte
 	mk sync.Map // map[[sha1.Size]byte][]byte
 }
 
@@ -27,18 +25,18 @@ func (m *inMemDb) hashKey(key []byte) [sha1.Size]byte {
 
 // Get retrieves an object from the database.
 // Not found should return nil, nil
-func (m *inMemDb) Get(ctx context.Context, key []byte) (pbobject.Object, error) {
+func (m *inMemDb) Get(ctx context.Context, key []byte) ([]byte, error) {
 	k := m.hashKey(key)
 	obj, ok := m.m.Load(k)
 	if !ok {
 		return nil, nil
 	}
 
-	return obj.(pbobject.Object), nil
+	return obj.([]byte), nil
 }
 
 // Set sets an object in the database.
-func (m *inMemDb) Set(ctx context.Context, key []byte, val pbobject.Object) error {
+func (m *inMemDb) Set(ctx context.Context, key []byte, val []byte) error {
 	k := m.hashKey(key)
 	m.m.Store(k, val)
 	m.mk.Store(k, key)

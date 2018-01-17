@@ -12,6 +12,7 @@ import (
 type Peer struct {
 	// db is the inca database
 	db dbm.Db
+
 	// peerPubKey is the public key of the peer
 	peerPubKey crypto.PubKey
 	peerID     lpeer.ID

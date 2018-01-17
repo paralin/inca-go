@@ -5,8 +5,9 @@ import (
 	"path"
 
 	"github.com/aperturerobotics/inca"
-	"github.com/aperturerobotics/inca-go/db"
+	"github.com/aperturerobotics/inca-go/objstore"
 	"github.com/aperturerobotics/inca-go/shell"
+	"github.com/aperturerobotics/pbobject"
 	"github.com/aperturerobotics/storageref"
 	"github.com/aperturerobotics/timestamp"
 	"github.com/golang/protobuf/proto"
@@ -17,9 +18,8 @@ var genesisKey = "/genesis"
 
 // Chain is an instance of a block chain.
 type Chain struct {
-	db      db.Db
+	db      objstore.ObjectStore
 	conf    *Config
-	shell   *shell.Shell
 	genesis *inca.Genesis
 }
 
@@ -31,8 +31,7 @@ func (c *Chain) applyPrefix(key string) []byte {
 // NewChain builds a new blockchain from scratch, minting a genesis block and committing it to IPFS.
 func NewChain(
 	ctx context.Context,
-	db db.Db,
-	shell *shell.Shell,
+	db objstore.ObjectStore,
 	chainID string,
 ) (*Chain, error) {
 	if chainID == "" {
@@ -45,33 +44,23 @@ func NewChain(
 		Timestamp: &genesisTs,
 	}
 
-	tag, err := shell.AddProtobufObject(ctx, genesis)
+	// TODO: encryption config
+	storageRef, objData, err := db.StoreObject(ctx, genesis, pbobject.EncryptionConfig{})
 	if err != nil {
 		return nil, err
 	}
 
 	conf := &Config{
-		GenesisRef: storageref.NewStorageRefIPFS(tag),
+		GenesisRef: storageref.NewStorageRefIPFS(storageRef),
 	}
-	ch := &Chain{conf: conf, shell: shell, genesis: genesis, db: db}
-	if err := ch.DbWriteGenesis(ctx); err != nil {
-		return nil, err
-	}
-
+	ch := &Chain{conf: conf, genesis: genesis, db: db}
 	return ch, nil
-}
-
-// DbWriteGenesis writes the genesis document to the db.
-func (c *Chain) DbWriteGenesis(ctx context.Context) error {
-	key := c.applyPrefix(genesisKey)
-	return c.db.Set(ctx, key, c.genesis)
 }
 
 // FromConfig loads a blockchain from a config.
 func FromConfig(
 	ctx context.Context,
-	db db.Db,
-	shell *shell.Shell,
+	db objstore.ObjectStore,
 	conf *Config,
 ) (*Chain, error) {
 	genObj, err := conf.GetGenesisRef().FollowRef(ctx)
@@ -84,7 +73,7 @@ func FromConfig(
 		return nil, errors.Errorf("genesis object unrecognized: %s", genObj.GetObjectTypeID().GetTypeUuid())
 	}
 
-	return &Chain{conf: conf, shell: shell, genesis: gen, db: db}, nil
+	return &Chain{conf: conf, genesis: gen, db: db}, nil
 }
 
 // GetConfig returns a copy of the chain config.
