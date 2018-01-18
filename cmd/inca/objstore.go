@@ -30,7 +30,7 @@ func GetObjectStore() (*objstore.ObjectStore, error) {
 	}
 
 	localStore := localdb.NewLocalDb(db)
-	remoteStore := ipfs.NewRemoteStore(sh.Shell)
+	remoteStore := ipfs.NewRemoteStore(sh)
 	objStore := objstore.NewObjectStore(rootContext, localStore, remoteStore)
 	objStoreCached = objStore
 	return objStoreCached, nil

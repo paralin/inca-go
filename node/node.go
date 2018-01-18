@@ -7,10 +7,10 @@ import (
 	"github.com/aperturerobotics/inca-go/chain"
 	"github.com/aperturerobotics/inca-go/db"
 	"github.com/aperturerobotics/inca-go/logctx"
-	"github.com/aperturerobotics/inca-go/shell"
 	"github.com/aperturerobotics/objstore"
 	"github.com/jbenet/goprocess"
 
+	api "github.com/ipfs/go-ipfs-api"
 	"github.com/libp2p/go-libp2p-crypto"
 	lpeer "github.com/libp2p/go-libp2p-peer"
 	// "github.com/pkg/errors"
@@ -23,7 +23,7 @@ type Node struct {
 
 	db       db.Db
 	objStore *objstore.ObjectStore
-	shell    *shell.Shell
+	shell    *api.Shell
 	chain    *chain.Chain
 	proc     goprocess.Process
 	initCh   chan chan error
@@ -37,7 +37,7 @@ func NewNode(
 	ctx context.Context,
 	db db.Db,
 	objStore *objstore.ObjectStore,
-	shell *shell.Shell,
+	shell *api.Shell,
 	chain *chain.Chain,
 	config *Config,
 ) (*Node, error) {

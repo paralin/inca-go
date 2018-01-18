@@ -3,19 +3,17 @@ package db
 import (
 	"context"
 
-	"github.com/aperturerobotics/inca-go/objtable"
 	"github.com/dgraph-io/badger"
 )
 
 // BadgerDB implements Db with badger.
 type BadgerDB struct {
 	*badger.DB
-	table *objtable.ObjectTable
 }
 
 // NewBadgerDB builds a new badger database.
-func NewBadgerDB(db *badger.DB, objectTable *objtable.ObjectTable) Db {
-	return &BadgerDB{DB: db, table: objectTable}
+func NewBadgerDB(db *badger.DB) Db {
+	return &BadgerDB{DB: db}
 }
 
 // Get retrieves an object from the database.

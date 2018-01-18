@@ -1,0 +1,8 @@
+syntax = "proto3";
+package convergentimmutable;
+
+// Config is the configuration for the convergent immutable strategy.
+message Config {
+  // PreSharedKey is the 32 byte pre-shared key.
+  bytes pre_shared_key = 1;
+}

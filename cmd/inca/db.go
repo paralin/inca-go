@@ -16,11 +16,6 @@ func init() {
 
 // GetDb builds / returns the db.
 func GetDb() (db.Db, error) {
-	sh, err := GetShell()
-	if err != nil {
-		return nil, err
-	}
-
 	dbMtx.Lock()
 	defer dbMtx.Unlock()
 
@@ -29,7 +24,7 @@ func GetDb() (db.Db, error) {
 	}
 
 	le := logctx.GetLogEntry(rootContext)
-	d, err := db.BuildCliDb(le, sh.ObjectTable)
+	d, err := db.BuildCliDb(le)
 	if err != nil {
 		return nil, err
 	}

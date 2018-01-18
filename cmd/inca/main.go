@@ -5,17 +5,15 @@ import (
 	"os"
 
 	"github.com/Sirupsen/logrus"
+	_ "github.com/aperturerobotics/inca-go/encryption/all"
 	"github.com/aperturerobotics/inca-go/logctx"
-	"github.com/aperturerobotics/inca-go/objtable"
-	"github.com/aperturerobotics/pbobject"
-	"github.com/aperturerobotics/pbobject/ipfs"
+	_ "github.com/aperturerobotics/storageref/all"
 	"github.com/urfave/cli"
 )
 
 var rootContext context.Context
 var incaCommands []cli.Command
 var incaFlags []cli.Flag
-var objTable = objtable.NewObjectTable()
 
 func main() {
 	log := logrus.New()
@@ -25,7 +23,6 @@ func main() {
 	defer ctxCancel()
 
 	rootContext = logctx.WithLogEntry(ctx, le)
-	rootContext = pbobject.WithObjectTable(rootContext, objTable.ObjectTable)
 
 	app := cli.NewApp()
 	app.Name = "inca"
@@ -33,15 +30,6 @@ func main() {
 	app.HideVersion = true
 	app.Commands = incaCommands
 	app.Flags = incaFlags
-	app.Before = func(c *cli.Context) error {
-		sh, err := GetShell()
-		if err != nil {
-			return err
-		}
-
-		rootContext = ipfs.WithObjectShell(rootContext, sh.FileShell)
-		return nil
-	}
 	if err := app.Run(os.Args); err != nil {
 		logrus.Fatal(err.Error())
 	}

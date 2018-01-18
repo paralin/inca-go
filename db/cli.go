@@ -2,7 +2,6 @@ package db
 
 import (
 	"github.com/Sirupsen/logrus"
-	"github.com/aperturerobotics/inca-go/objtable"
 	"github.com/dgraph-io/badger"
 	"github.com/pkg/errors"
 	"github.com/urfave/cli"
@@ -44,7 +43,7 @@ func init() {
 }
 
 // BuildCliDb builds the db from CLI args.
-func BuildCliDb(log *logrus.Entry, objectTable *objtable.ObjectTable) (Db, error) {
+func BuildCliDb(log *logrus.Entry) (Db, error) {
 	if cliDbArgs.DbType != "badgerdb" {
 		return nil, errors.Errorf("unsupported db type: %s", cliDbArgs.DbType)
 	}
@@ -61,5 +60,5 @@ func BuildCliDb(log *logrus.Entry, objectTable *objtable.ObjectTable) (Db, error
 		return nil, err
 	}
 
-	return NewBadgerDB(bdb, objectTable), nil
+	return NewBadgerDB(bdb), nil
 }

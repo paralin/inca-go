@@ -9,6 +9,8 @@ import (
 	"github.com/aperturerobotics/inca-go/chain"
 	"github.com/aperturerobotics/inca-go/logctx"
 	"github.com/aperturerobotics/inca-go/node"
+	"github.com/aperturerobotics/objstore"
+	"github.com/aperturerobotics/pbobject"
 	"github.com/golang/protobuf/jsonpb"
 )
 
@@ -39,6 +41,7 @@ func GetNode() (*node.Node, error) {
 	if err != nil {
 		return nil, err
 	}
+	ctx := objstore.WithObjStore(rootContext, db)
 
 	dbm, err := GetDb()
 	if err != nil {
@@ -56,19 +59,22 @@ func GetNode() (*node.Node, error) {
 	}
 
 	le.Debug("loading blockchain")
-	ch, err := chain.FromConfig(rootContext, db, chainConf)
+	ch, err := chain.FromConfig(ctx, db, chainConf)
 	if err != nil {
 		return nil, err
 	}
 	le.WithField("chain-id", ch.GetGenesis().GetChainId()).Info("blockchain loaded")
+	encStrat := ch.GetEncryptionStrategy()
 
 	{
-		obj, err := chainConf.GetGenesisRef().FollowRef(rootContext)
-		if err != nil {
+		genEncConf := encStrat.GetGenesisEncryptionConfigWithDigest(chainConf.GetGenesisRef().GetObjectDigest())
+		genCtx := pbobject.WithEncryptionConf(ctx, &genEncConf)
+
+		gen := &inca.Genesis{}
+		if err := chainConf.GetGenesisRef().FollowRef(genCtx, nil, gen); err != nil {
 			return nil, err
 		}
 
-		gen := obj.(*inca.Genesis)
 		now := time.Now()
 		timeAgo := now.Sub(gen.GetTimestamp().ToTime()).String()
 		le.WithField("minted-time-ago", timeAgo).Info("blockchain genesis loaded")
@@ -84,7 +90,7 @@ func GetNode() (*node.Node, error) {
 		return nil, err
 	}
 
-	nod, err := node.NewNode(rootContext, dbm, db, sh, ch, nodeConf)
+	nod, err := node.NewNode(ctx, dbm, db, sh, ch, nodeConf)
 	if err != nil {
 		return nil, err
 	}

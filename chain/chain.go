@@ -5,6 +5,9 @@ import (
 	"path"
 
 	"github.com/aperturerobotics/inca"
+	"github.com/aperturerobotics/inca-go/encryption"
+	"github.com/aperturerobotics/inca-go/encryption/convergentimmutable"
+	"github.com/aperturerobotics/inca-go/encryption/impl"
 	"github.com/aperturerobotics/objstore"
 	"github.com/aperturerobotics/pbobject"
 	"github.com/aperturerobotics/storageref"
@@ -17,9 +20,10 @@ var genesisKey = "/genesis"
 
 // Chain is an instance of a block chain.
 type Chain struct {
-	db      *objstore.ObjectStore
-	conf    *Config
-	genesis *inca.Genesis
+	db       *objstore.ObjectStore
+	conf     *Config
+	genesis  *inca.Genesis
+	encStrat encryption.Strategy
 }
 
 // applyPrefix applies the chain ID prefix to the key.
@@ -37,6 +41,16 @@ func NewChain(
 		return nil, errors.New("chain id must be set")
 	}
 
+	strat, err := convergentimmutable.NewConvergentImmutableStrategy()
+	if err != nil {
+		return nil, err
+	}
+
+	argsObjectWrapper, _, err := strat.BuildArgs()
+	if err != nil {
+		return nil, err
+	}
+
 	genesisTs := timestamp.Now()
 	genesis := &inca.Genesis{
 		ChainId:   chainID,
@@ -44,15 +58,19 @@ func NewChain(
 	}
 
 	// TODO: encryption config
-	storageRef, _, err := db.StoreObject(ctx, genesis, pbobject.EncryptionConfig{})
+	storageRef, _, err := db.StoreObject(ctx, genesis, strat.GetGenesisEncryptionConfig())
 	if err != nil {
 		return nil, err
 	}
 
 	conf := &Config{
-		GenesisRef: storageref.NewStorageRefIPFS(storageRef),
+		GenesisRef:         storageRef,
+		EncryptionStrategy: convergentimmutable.StrategyType,
 	}
+
 	ch := &Chain{conf: conf, genesis: genesis, db: db}
+	conf.EncryptionArgs = argsObjectWrapper
+	ch.encStrat = strat
 	return ch, nil
 }
 
@@ -62,17 +80,23 @@ func FromConfig(
 	db *objstore.ObjectStore,
 	conf *Config,
 ) (*Chain, error) {
-	genObj, err := conf.GetGenesisRef().FollowRef(ctx)
+	encStrat, err := impl.BuildEncryptionStrategy(
+		conf.GetEncryptionStrategy(),
+		conf.GetEncryptionArgs(),
+	)
 	if err != nil {
+		return nil, err
+	}
+
+	encConf := encStrat.GetGenesisEncryptionConfigWithDigest(conf.GetGenesisRef().GetObjectDigest())
+	encConfCtx := pbobject.WithEncryptionConf(ctx, &encConf)
+
+	genObj := &inca.Genesis{}
+	if err := conf.GetGenesisRef().FollowRef(encConfCtx, nil, genObj); err != nil {
 		return nil, errors.WithMessage(err, "cannot follow genesis reference")
 	}
 
-	gen, ok := genObj.(*inca.Genesis)
-	if !ok {
-		return nil, errors.Errorf("genesis object unrecognized: %s", genObj.GetObjectTypeID().GetTypeUuid())
-	}
-
-	return &Chain{conf: conf, genesis: gen, db: db}, nil
+	return &Chain{conf: conf, genesis: genObj, db: db, encStrat: encStrat}, nil
 }
 
 // GetConfig returns a copy of the chain config.
@@ -83,6 +107,11 @@ func (c *Chain) GetConfig() *Config {
 // GetGenesis returns a copy of the genesis.
 func (c *Chain) GetGenesis() *inca.Genesis {
 	return proto.Clone(c.genesis).(*inca.Genesis)
+}
+
+// GetEncryptionStrategy returns the encryption strategy for this chain.
+func (c *Chain) GetEncryptionStrategy() encryption.Strategy {
+	return c.encStrat
 }
 
 // ValidateGenesisRef checks if the genesis references matches our local genesis reference.
