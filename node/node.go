@@ -47,7 +47,15 @@ func NewNode(
 		return nil, err
 	}
 
-	n := &Node{ctx: ctx, shell: shell, le: le, chain: chain, db: db, privKey: privKey, objStore: objStore}
+	n := &Node{
+		ctx:      ctx,
+		shell:    shell,
+		le:       le,
+		chain:    chain,
+		db:       db,
+		privKey:  privKey,
+		objStore: objStore,
+	}
 	n.nodeAddr, err = lpeer.IDFromPrivateKey(privKey)
 	if err != nil {
 		return nil, err

@@ -59,7 +59,7 @@ func GetNode() (*node.Node, error) {
 	}
 
 	le.Debug("loading blockchain")
-	ch, err := chain.FromConfig(ctx, db, chainConf)
+	ch, err := chain.FromConfig(ctx, dbm, db, chainConf)
 	if err != nil {
 		return nil, err
 	}

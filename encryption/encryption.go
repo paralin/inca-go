@@ -15,4 +15,8 @@ type Strategy interface {
 	GetGenesisEncryptionConfig() pbobject.EncryptionConfig
 	// GetGenesisEncryptionConfigWithDigest returns the encryption configuration for the genesis block with a digest.
 	GetGenesisEncryptionConfigWithDigest(digest []byte) pbobject.EncryptionConfig
+	// GetNodeMessageEncryptionConfig returns the encryption configuration for encrypting a node message.
+	GetNodeMessageEncryptionConfig() pbobject.EncryptionConfig
+	// GetNodeMessageEncryptionConfigWithDigest returns the encryption configuration for the node message with a digest.
+	GetNodeMessageEncryptionConfigWithDigest(digest []byte) pbobject.EncryptionConfig
 }

@@ -1,23 +1,29 @@
 package peer
 
 import (
+	"context"
 	"sync"
 
 	"github.com/aperturerobotics/inca-go/db"
+	"github.com/aperturerobotics/inca-go/logctx"
+	"github.com/aperturerobotics/objstore"
 	"github.com/libp2p/go-libp2p-crypto"
 	lpeer "github.com/libp2p/go-libp2p-peer"
 )
 
 // PeerStore manages peer objects
 type PeerStore struct {
-	db    db.Db
-	peers sync.Map // map[lpeer.ID]*Peer
+	ctx           context.Context
+	db            db.Db
+	peers         sync.Map // map[lpeer.ID]*Peer
+	objStore      *objstore.ObjectStore
+	genesisDigest []byte
 }
 
 // NewPeerStore builds a new peer store, loading the initial set from the db.
-func NewPeerStore(dbm db.Db) *PeerStore {
+func NewPeerStore(ctx context.Context, dbm db.Db, objStore *objstore.ObjectStore, genesisDigest []byte) *PeerStore {
 	dbm = db.WithPrefix(dbm, []byte("/peers"))
-	return &PeerStore{db: dbm}
+	return &PeerStore{ctx: ctx, db: dbm, objStore: objStore, genesisDigest: genesisDigest}
 }
 
 // GetPeer gets a peer from the store.
@@ -30,17 +36,21 @@ func (ps *PeerStore) GetPeer(peerID lpeer.ID) *Peer {
 }
 
 // GetPeerWithPubKey builds a peer with a public key if it doesn't already exist.
-func (ps *PeerStore) GetPeerWithPubKey(pubKey crypto.PubKey) *Peer {
+func (ps *PeerStore) GetPeerWithPubKey(pubKey crypto.PubKey) (*Peer, error) {
 	id, _ := lpeer.IDFromPublicKey(pubKey)
 	if peer := ps.GetPeer(id); peer != nil {
-		return peer
+		return peer, nil
 	}
 
-	p := NewPeer(ps.db, pubKey)
+	le := logctx.GetLogEntry(ps.ctx)
+	p, err := NewPeer(ps.ctx, le, ps.db, ps.objStore, pubKey, ps.genesisDigest)
+	if err != nil {
+		return nil, err
+	}
 	peerObj, loaded := ps.peers.LoadOrStore(id, p)
 	if loaded {
 		p = peerObj.(*Peer)
 	}
 
-	return p
+	return p, nil
 }

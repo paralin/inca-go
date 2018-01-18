@@ -48,8 +48,18 @@ func cmdInitCluster(p goprocess.Process) error {
 		return err
 	}
 
+	sh, err := GetShell()
+	if err != nil {
+		return err
+	}
+
+	db, err := GetDb()
+	if err != nil {
+		return err
+	}
+
 	le.WithField("chain-id", initChainArgs.ChainID).Debug("loading blockchain")
-	ch, err := chain.NewChain(rootContext, objStore, initChainArgs.ChainID)
+	ch, err := chain.NewChain(rootContext, db, objStore, initChainArgs.ChainID, sh)
 	if err != nil {
 		return err
 	}
@@ -59,7 +69,6 @@ func cmdInitCluster(p goprocess.Process) error {
 	le.
 		WithField("genesis-object", conf.GetGenesisRef().GetIpfs().GetObjectHash()).
 		Info("successfully built genesis block")
-
 	marshaler := &jsonpb.Marshaler{Indent: "\t"}
 	dat, _ := marshaler.MarshalToString(conf)
 	dat += "\n"
