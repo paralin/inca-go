@@ -136,6 +136,16 @@ func (s *Strategy) GetNodeMessageEncryptionConfigWithDigest(digest []byte) pbobj
 	return s.GetEncryptionConfigWithDigest(digest)
 }
 
+// GetBlockEncryptionConfig returns the configuration for block related messages.
+func (s *Strategy) GetBlockEncryptionConfig() pbobject.EncryptionConfig {
+	return s.GetEncryptionConfig()
+}
+
+// GetBlockEncryptionConfigWithDigest returns the block encryption configuration for the genesis block with a digest.
+func (s *Strategy) GetBlockEncryptionConfigWithDigest(digest []byte) pbobject.EncryptionConfig {
+	return s.GetEncryptionConfigWithDigest(digest)
+}
+
 // configTypeID is the type ID of the configuration.
 var configTypeID = &pbobject.ObjectTypeID{TypeUuid: "/inca/encryption/convergent-immutable/config"}
 

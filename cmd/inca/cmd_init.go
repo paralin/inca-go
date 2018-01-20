@@ -48,18 +48,18 @@ func cmdInitCluster(p goprocess.Process) error {
 		return err
 	}
 
-	sh, err := GetShell()
-	if err != nil {
-		return err
-	}
-
 	db, err := GetDb()
 	if err != nil {
 		return err
 	}
 
+	privKey, _, err := crypto.GenerateEd25519Key(rand.Reader)
+	if err != nil {
+		return err
+	}
+
 	le.WithField("chain-id", initChainArgs.ChainID).Debug("loading blockchain")
-	ch, err := chain.NewChain(rootContext, db, objStore, initChainArgs.ChainID, sh)
+	ch, err := chain.NewChain(rootContext, db, objStore, initChainArgs.ChainID, privKey)
 	if err != nil {
 		return err
 	}
@@ -74,11 +74,6 @@ func cmdInitCluster(p goprocess.Process) error {
 	dat += "\n"
 
 	if err := ioutil.WriteFile(chainConfigPath, []byte(dat), 0644); err != nil {
-		return err
-	}
-
-	privKey, _, err := crypto.GenerateEd25519Key(rand.Reader)
-	if err != nil {
 		return err
 	}
 

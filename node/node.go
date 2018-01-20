@@ -6,7 +6,9 @@ import (
 	"github.com/Sirupsen/logrus"
 	"github.com/aperturerobotics/inca-go/chain"
 	"github.com/aperturerobotics/inca-go/db"
+	"github.com/aperturerobotics/inca-go/encryption"
 	"github.com/aperturerobotics/inca-go/logctx"
+	"github.com/aperturerobotics/inca-go/peer"
 	"github.com/aperturerobotics/objstore"
 	"github.com/jbenet/goprocess"
 
@@ -21,14 +23,18 @@ type Node struct {
 	ctx context.Context
 	le  *logrus.Entry
 
-	db       db.Db
-	objStore *objstore.ObjectStore
-	shell    *api.Shell
-	chain    *chain.Chain
-	proc     goprocess.Process
-	initCh   chan chan error
-	privKey  crypto.PrivKey
-	nodeAddr lpeer.ID
+	db        db.Db
+	objStore  *objstore.ObjectStore
+	shell     *api.Shell
+	chain     *chain.Chain
+	proc      goprocess.Process
+	initCh    chan chan error
+	privKey   crypto.PrivKey
+	nodeAddr  lpeer.ID
+	peerStore *peer.PeerStore
+	encStrat  encryption.Strategy
+
+	chainSub *api.PubSubSubscription
 }
 
 // NewNode builds the p2p node.
@@ -47,17 +53,27 @@ func NewNode(
 		return nil, err
 	}
 
+	genesisRef := chain.GetGenesisRef()
+	peerStore := peer.NewPeerStore(ctx, db, objStore, genesisRef.GetObjectDigest())
+
 	n := &Node{
-		ctx:      ctx,
-		shell:    shell,
-		le:       le,
-		chain:    chain,
-		db:       db,
-		privKey:  privKey,
-		objStore: objStore,
+		ctx:       ctx,
+		shell:     shell,
+		le:        le,
+		chain:     chain,
+		db:        db,
+		privKey:   privKey,
+		objStore:  objStore,
+		peerStore: peerStore,
+		encStrat:  chain.GetEncryptionStrategy(),
 	}
 	n.nodeAddr, err = lpeer.IDFromPrivateKey(privKey)
 	if err != nil {
+		return nil, err
+	}
+
+	// start listening on pubsub
+	if err := n.initPubSub(); err != nil {
 		return nil, err
 	}
 
@@ -74,7 +90,7 @@ func (n *Node) GetProcess() goprocess.Process {
 // processNode is the inner process loop for the node.
 func (n *Node) processNode(proc goprocess.Process) {
 	n.le.WithField("addr", n.nodeAddr.Pretty()).Info("node running")
-	// Sync up to latest known revision
+
 	for {
 		select {
 		case <-n.ctx.Done():

@@ -1,0 +1,31 @@
+syntax = "proto3";
+package chain;
+
+import "github.com/aperturerobotics/storageref/storageref.proto";
+
+// SegmentState tracks state of a Segment.
+message SegmentState {
+  // Id is the identifier of the segment.
+  // Usually a UUID
+  string id = 1;
+  // Status is the status of the segment.
+  SegmentStatus status = 2;
+  // HeadBlock is a reference to the HEAD of this segment.
+  storageref.StorageRef head_block = 3;
+  // TailBlock is a reference to the TAIL of this segment.
+  storageref.StorageRef tail_block = 4;
+  // SegmentPrev is the previous segment.
+  storageref.StorageRef segment_prev = 5;
+  // SegmentNext is the next segment.
+  storageref.StorageRef segment_next = 6;
+}
+
+// SegmentStatus is the status of a segment.
+enum SegmentStatus {
+  // INVALID indicates the segment has been shown to be invalid.
+  SegmentStatus_INVALID = 0;
+  // DISJOINTED indicates the segment has not been connected to any trusted chain yet.
+  SegmentStatus_DISJOINTED = 1;
+  // VALID indicates the segment has been shown to be valid.
+  SegmentStatus_VALID = 2;
+}
