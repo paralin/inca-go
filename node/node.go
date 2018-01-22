@@ -6,7 +6,6 @@ import (
 	"github.com/Sirupsen/logrus"
 	"github.com/aperturerobotics/inca-go/chain"
 	"github.com/aperturerobotics/inca-go/db"
-	"github.com/aperturerobotics/inca-go/encryption"
 	"github.com/aperturerobotics/inca-go/logctx"
 	"github.com/aperturerobotics/inca-go/peer"
 	"github.com/aperturerobotics/objstore"
@@ -26,13 +25,13 @@ type Node struct {
 	db        db.Db
 	objStore  *objstore.ObjectStore
 	shell     *api.Shell
+	proposer  *chain.Proposer
 	chain     *chain.Chain
 	proc      goprocess.Process
 	initCh    chan chan error
 	privKey   crypto.PrivKey
 	nodeAddr  lpeer.ID
 	peerStore *peer.PeerStore
-	encStrat  encryption.Strategy
 
 	chainSub *api.PubSubSubscription
 }
@@ -44,7 +43,7 @@ func NewNode(
 	db db.Db,
 	objStore *objstore.ObjectStore,
 	shell *api.Shell,
-	chain *chain.Chain,
+	ch *chain.Chain,
 	config *Config,
 ) (*Node, error) {
 	le := logctx.GetLogEntry(ctx)
@@ -53,19 +52,19 @@ func NewNode(
 		return nil, err
 	}
 
-	genesisRef := chain.GetGenesisRef()
+	genesisRef := ch.GetGenesisRef()
 	peerStore := peer.NewPeerStore(ctx, db, objStore, genesisRef.GetObjectDigest())
 
 	n := &Node{
 		ctx:       ctx,
 		shell:     shell,
 		le:        le,
-		chain:     chain,
+		chain:     ch,
 		db:        db,
 		privKey:   privKey,
 		objStore:  objStore,
 		peerStore: peerStore,
-		encStrat:  chain.GetEncryptionStrategy(),
+		proposer:  chain.NewProposer(le, ch),
 	}
 	n.nodeAddr, err = lpeer.IDFromPrivateKey(privKey)
 	if err != nil {
@@ -89,13 +88,22 @@ func (n *Node) GetProcess() goprocess.Process {
 
 // processNode is the inner process loop for the node.
 func (n *Node) processNode(proc goprocess.Process) {
+	ctx := n.ctx
 	n.le.WithField("addr", n.nodeAddr.Pretty()).Info("node running")
+
+	errCh := make(chan error, 5)
+	go func() {
+		errCh <- n.proposer.ManageProposer(ctx)
+	}()
 
 	for {
 		select {
-		case <-n.ctx.Done():
+		case <-ctx.Done():
 			return
 		case <-proc.Closing():
+			return
+		case err := <-errCh:
+			n.le.WithError(err).Fatal("internal error")
 			return
 		}
 	}

@@ -7,7 +7,7 @@ import (
 
 	"github.com/Sirupsen/logrus"
 	"github.com/aperturerobotics/inca"
-	"github.com/aperturerobotics/inca-go/db"
+	idb "github.com/aperturerobotics/inca-go/db"
 	"github.com/aperturerobotics/inca-go/encryption"
 	"github.com/aperturerobotics/inca-go/encryption/convergentimmutable"
 	"github.com/aperturerobotics/inca-go/encryption/impl"
@@ -16,6 +16,7 @@ import (
 	"github.com/aperturerobotics/pbobject"
 	"github.com/aperturerobotics/storageref"
 	srdigest "github.com/aperturerobotics/storageref/digest"
+	_ "github.com/aperturerobotics/storageref/ipfs"
 	"github.com/aperturerobotics/timestamp"
 	"github.com/golang/protobuf/proto"
 	"github.com/libp2p/go-libp2p-crypto"
@@ -27,20 +28,22 @@ var genesisKey = "/genesis"
 
 // Chain is an instance of a blockchain.
 type Chain struct {
-	ctx      context.Context
-	db       *objstore.ObjectStore
-	dbm      db.Db
-	conf     *Config
-	genesis  *inca.Genesis
-	encStrat encryption.Strategy
-	le       *logrus.Entry
-	state    ChainState
+	*SegmentStore
+	ctx                 context.Context
+	db                  *objstore.ObjectStore
+	dbm                 idb.Db
+	conf                *Config
+	genesis             *inca.Genesis
+	encStrat            encryption.Strategy
+	le                  *logrus.Entry
+	state               ChainState
+	recheckStateTrigger chan struct{}
 }
 
 // NewChain builds a new blockchain from scratch, minting a genesis block and committing it to IPFS.
 func NewChain(
 	ctx context.Context,
-	dbm db.Db,
+	dbm idb.Db,
 	db *objstore.ObjectStore,
 	chainID string,
 	validatorPriv crypto.PrivKey,
@@ -50,6 +53,10 @@ func NewChain(
 	}
 
 	le := logctx.GetLogEntry(ctx)
+	if objstore.GetObjStore(ctx) == nil {
+		ctx = objstore.WithObjStore(ctx, db)
+	}
+
 	strat, err := convergentimmutable.NewConvergentImmutableStrategy()
 	if err != nil {
 		return nil, err
@@ -82,13 +89,15 @@ func NewChain(
 	}
 
 	ch := &Chain{
-		ctx:     ctx,
-		conf:    conf,
-		genesis: genesis,
-		db:      db,
-		dbm:     dbm,
-		le:      le,
+		ctx:                 ctx,
+		conf:                conf,
+		genesis:             genesis,
+		db:                  db,
+		dbm:                 dbm,
+		le:                  le,
+		recheckStateTrigger: make(chan struct{}, 1),
 	}
+	ch.SegmentStore = NewSegmentStore(ctx, ch, idb.WithPrefix(dbm, []byte(fmt.Sprintf("/chain/%s/segments", ch.genesis.GetChainId()))))
 	conf.EncryptionArgs = argsObjectWrapper
 	ch.encStrat = strat
 
@@ -171,16 +180,22 @@ func NewChain(
 		return nil, err
 	}
 
+	go ch.manageState()
 	return ch, nil
 }
 
 // FromConfig loads a blockchain from a config.
 func FromConfig(
 	ctx context.Context,
-	dbm db.Db,
+	dbm idb.Db,
 	db *objstore.ObjectStore,
 	conf *Config,
 ) (*Chain, error) {
+	le := logctx.GetLogEntry(ctx)
+	if objstore.GetObjStore(ctx) == nil {
+		ctx = objstore.WithObjStore(ctx, db)
+	}
+
 	encStrat, err := impl.BuildEncryptionStrategy(
 		conf.GetEncryptionStrategy(),
 		conf.GetEncryptionArgs(),
@@ -197,19 +212,23 @@ func FromConfig(
 		return nil, errors.WithMessage(err, "cannot follow genesis reference")
 	}
 
-	le := logctx.GetLogEntry(ctx)
 	ch := &Chain{
-		ctx:      ctx,
-		conf:     conf,
-		genesis:  genObj,
-		db:       db,
-		dbm:      dbm,
-		encStrat: encStrat,
-		le:       le,
+		ctx:                 ctx,
+		conf:                conf,
+		genesis:             genObj,
+		db:                  db,
+		dbm:                 dbm,
+		encStrat:            encStrat,
+		le:                  le,
+		recheckStateTrigger: make(chan struct{}, 1),
 	}
+	ch.SegmentStore = NewSegmentStore(ctx, ch, idb.WithPrefix(dbm, []byte(fmt.Sprintf("/chain/%s/segments", ch.genesis.GetChainId()))))
+
 	if err := ch.readState(ctx); err != nil {
 		return nil, errors.WithMessage(err, "cannot load state from db")
 	}
+	go ch.manageState()
+
 	return ch, nil
 }
 
@@ -259,6 +278,8 @@ func (c *Chain) dbKey() []byte {
 
 // writeState writes the state to the database.
 func (c *Chain) writeState(ctx context.Context) error {
+	defer c.triggerStateRecheck()
+
 	dat, err := proto.Marshal(&c.state)
 	if err != nil {
 		return err
@@ -281,4 +302,62 @@ func (c *Chain) readState(ctx context.Context) error {
 	}
 
 	return proto.Unmarshal(dat, &c.state)
+}
+
+// manageState manages the state
+func (c *Chain) manageState() {
+	ctx, ctxCancel := context.WithCancel(c.ctx)
+	defer ctxCancel()
+
+	// Main state update loop
+	for {
+		if err := c.manageStateOnce(ctx); err != nil {
+			c.le.WithError(err).Warn("chain management errored")
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-c.recheckStateTrigger:
+		}
+	}
+}
+
+func (c *Chain) manageStateOnce(ctx context.Context) error {
+	// Evaluate current state
+	stateSegment := c.state.GetStateSegmentRef()
+	if stateSegment == nil {
+		return errors.New("no current state segment")
+	}
+
+	segmentState := &SegmentState{}
+	if err := stateSegment.FollowRef(ctx, nil, segmentState); err != nil {
+		return err
+	}
+
+	// c.le.WithField("state-segment", segmentState.GetId()).Debug("active state segment")
+
+	// Check if we should fast-forward the segment.
+	if segmentState.GetSegmentNext() != nil {
+		nextSegmentState := &SegmentState{}
+		if err := segmentState.GetSegmentPrev().FollowRef(ctx, nil, nextSegmentState); err != nil {
+			return err
+		}
+
+		// TOOD: evaluate state changes
+		c.state.StateSegmentRef = segmentState.GetSegmentNext()
+		if err := c.writeState(ctx); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// triggerStateRecheck triggers a state recheck without blocking.
+func (c *Chain) triggerStateRecheck() {
+	select {
+	case c.recheckStateTrigger <- struct{}{}:
+	default:
+	}
 }

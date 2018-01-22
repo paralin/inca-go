@@ -9,8 +9,8 @@ import (
 
 // inMemDb is a in-memory database.
 type inMemDb struct {
-	m  sync.Map // map[[sha1.Size]byte][]byte
-	mk sync.Map // map[[sha1.Size]byte][]byte
+	m  sync.Map // map[[sha1.Size]byte][]byte // map of values
+	mk sync.Map // map[[sha1.Size]byte][]byte // map of keys
 }
 
 // NewInmemDb returns a in-memory database.
@@ -54,7 +54,7 @@ func (m *inMemDb) List(ctx context.Context, prefix []byte) ([][]byte, error) {
 		}
 
 		kb := key.([]byte)
-		if bytes.HasPrefix(kb, prefix) {
+		if len(prefix) == 0 || bytes.HasPrefix(kb, prefix) {
 			ks = append(ks, kb)
 		}
 		return true
