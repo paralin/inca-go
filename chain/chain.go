@@ -1,9 +1,12 @@
 package chain
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
+	"sync"
+	"time"
 
 	"github.com/Sirupsen/logrus"
 	"github.com/aperturerobotics/inca"
@@ -39,6 +42,15 @@ type Chain struct {
 	state               ChainState
 	recheckStateTrigger chan struct{}
 	pubsubTopic         string
+
+	stateSnapshotCtx       context.Context
+	stateSnapshotCtxCancel context.CancelFunc
+	lastStateSnapshot      *ChainStateSnapshot
+
+	stateSubs       sync.Map
+	lastHeadDigest  []byte
+	lastBlock       *inca.Block
+	lastBlockHeader *inca.BlockHeader
 }
 
 // NewChain builds a new blockchain from scratch, minting a genesis block and committing it to IPFS.
@@ -144,21 +156,52 @@ func NewChain(
 	}
 
 	// build the first block
-	firstBlockEncConf := strat.GetBlockEncryptionConfig()
-	firstBlockEncConf.SignerKeys = []crypto.PrivKey{validatorPriv}
-	firstBlock := &inca.BlockHeader{
+	nowTs := timestamp.Now()
+	firstBlockHeaderEncConf := strat.GetBlockEncryptionConfig()
+	firstBlockHeaderEncConf.SignerKeys = []crypto.PrivKey{validatorPriv}
+	firstBlockHeader := &inca.BlockHeader{
 		GenesisRef:         genesisStorageRef,
 		ChainConfigRef:     chainConfStorageRef,
 		NextChainConfigRef: chainConfStorageRef,
 		RoundInfo: &inca.BlockRoundInfo{
-			Height: 1,
-			Round:  1,
+			Height: 0,
+			Round:  0,
+		},
+		BlockTs: &nowTs,
+	}
+	firstBlockHeaderStorageRef, _, err := db.StoreObject(
+		ctx,
+		firstBlockHeader,
+		firstBlockHeaderEncConf,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	// build a Vote for the first block
+	firstBlockVoteEncConf := strat.GetNodeMessageEncryptionConfig(validatorPriv)
+	firstBlockVote := &inca.Vote{
+		BlockHeaderRef: firstBlockHeaderStorageRef,
+	}
+	firstBlockVoteStorageRef, _, err := db.StoreObject(
+		ctx,
+		firstBlockVote,
+		firstBlockVoteEncConf,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	firstBlock := &inca.Block{
+		BlockHeaderRef: firstBlockHeaderStorageRef,
+		VoteRefs: []*storageref.StorageRef{
+			firstBlockVoteStorageRef,
 		},
 	}
 	firstBlockStorageRef, _, err := db.StoreObject(
 		ctx,
 		firstBlock,
-		firstBlockEncConf,
+		firstBlockHeaderEncConf,
 	)
 	if err != nil {
 		return nil, err
@@ -338,8 +381,6 @@ func (c *Chain) manageStateOnce(ctx context.Context) error {
 		return err
 	}
 
-	// c.le.WithField("state-segment", segmentState.GetId()).Debug("active state segment")
-
 	// Check if we should fast-forward the segment.
 	if segmentState.GetSegmentNext() != nil {
 		nextSegmentState := &SegmentState{}
@@ -347,11 +388,47 @@ func (c *Chain) manageStateOnce(ctx context.Context) error {
 			return err
 		}
 
-		// TOOD: evaluate state changes
 		c.state.StateSegmentRef = segmentState.GetSegmentNext()
 		if err := c.writeState(ctx); err != nil {
 			return err
 		}
+
+		segmentState = nextSegmentState
+	}
+
+	headDigest := segmentState.GetHeadBlock().GetObjectDigest()
+	if bytes.Compare(headDigest, c.lastHeadDigest) != 0 {
+		headBlock := &inca.Block{}
+		{
+			encConf := c.GetEncryptionStrategy().GetBlockEncryptionConfigWithDigest(segmentState.GetHeadBlock().GetObjectDigest())
+			ctx := pbobject.WithEncryptionConf(ctx, &encConf)
+			if err := segmentState.GetHeadBlock().FollowRef(ctx, nil, headBlock); err != nil {
+				return err
+			}
+		}
+
+		headBlockHeader := &inca.BlockHeader{}
+		{
+			encConf := c.GetEncryptionStrategy().GetBlockEncryptionConfigWithDigest(headBlock.GetBlockHeaderRef().GetObjectDigest())
+			ctx := pbobject.WithEncryptionConf(ctx, &encConf)
+			if err := headBlock.GetBlockHeaderRef().FollowRef(ctx, nil, headBlockHeader); err != nil {
+				return err
+			}
+		}
+
+		now := time.Now()
+		headBlockTs := headBlockHeader.GetBlockTs().ToTime()
+		c.le.
+			WithField("head", headBlockHeader.GetRoundInfo().String()).
+			WithField("block-ipfs-ref", headBlock.GetBlockHeaderRef().GetIpfs().GetObjectHash()).
+			WithField("block-time-ago", now.Sub(headBlockTs).String()).
+			Debug("head block updated")
+		c.lastBlock = headBlock
+		c.lastBlockHeader = headBlockHeader
+
+		// TODO: update blockchain state, emit state snapshot update
+		// Compute current height and round and when the round will end
+		// stateSnap := &ChainStateSnapshot{}
 	}
 
 	return nil
