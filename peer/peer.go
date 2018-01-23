@@ -126,6 +126,13 @@ func (p *Peer) loadDbState(ctx context.Context) error {
 	return nil
 }
 
+// ProcessNodePubsubMessage processes an incoming node pubsub message.
+// The message may not be from this peer, it needs to be verfied.
+func (p *Peer) ProcessNodePubsubMessage(msg *inca.ChainPubsubMessage) {
+	ref := msg.GetNodeMessageRef()
+	p.le.Debugf("peer pub-sub received with digest: %v", ref.GetObjectDigest())
+}
+
 // writeDbState writes the last observed message and other parameters to the db.
 func (p *Peer) writeDbState() error {
 	ctx := context.TODO()

@@ -139,7 +139,7 @@ func (n *Node) SendMessage(ctx context.Context, msgType inca.NodeMessageType, ms
 	sref, _, err := n.objStore.StoreObject(
 		ctx,
 		nm,
-		n.chain.GetEncryptionStrategy().GetNodeMessageEncryptionConfig(),
+		n.chain.GetEncryptionStrategy().GetNodeMessageEncryptionConfig(n.privKey),
 	)
 	if err != nil {
 		return err
@@ -163,7 +163,7 @@ func (n *Node) pubsubSendMsg(msg *inca.NodeMessage) error {
 	msgSref, _, err := n.objStore.StoreObject(
 		n.ctx,
 		msg,
-		n.chain.GetEncryptionStrategy().GetNodeMessageEncryptionConfig(),
+		n.chain.GetEncryptionStrategy().GetNodeMessageEncryptionConfig(n.privKey),
 	)
 	if err != nil {
 		return err
@@ -171,6 +171,7 @@ func (n *Node) pubsubSendMsg(msg *inca.NodeMessage) error {
 
 	pubSubMsg := &inca.ChainPubsubMessage{
 		NodeMessageRef: msgSref,
+		PeerId:         n.nodeAddr.Pretty(),
 	}
 
 	dat, err := proto.Marshal(pubSubMsg)
@@ -191,6 +192,45 @@ func (n *Node) pubsubSendMsg(msg *inca.NodeMessage) error {
 	return nil
 }
 
+// processPubSub processes the pub-sub channel.
+func (n *Node) processPubSub() error {
+	defer n.chainSub.Cancel()
+
+	for {
+		record, err := n.chainSub.Next()
+		if err != nil {
+			return err
+		}
+
+		le := n.le.WithField("ipfs-peer-id", record.From().Pretty())
+		msg := &inca.ChainPubsubMessage{}
+		dat, err := base64.StdEncoding.DecodeString(string(record.Data()))
+		if err != nil {
+			le.WithError(err).Warn("pub-sub message invalid base64 string")
+			continue
+		}
+
+		if err := proto.Unmarshal(dat, msg); err != nil {
+			le.WithError(err).Warn("pub-sub message invalid storage ref object")
+			continue
+		}
+
+		peerId, err := lpeer.IDB58Decode(msg.GetPeerId())
+		if err != nil {
+			le.WithError(err).Warn("pub-sub message ignoring invalid peer id")
+			continue
+		}
+
+		le = le.WithField("peer-id", peerId.Pretty())
+		peer := n.peerStore.GetPeer(peerId)
+		if peer == nil {
+			le.WithError(err).Warn("pub-sub message ignoring unknown peer id")
+			continue
+		}
+		peer.ProcessNodePubsubMessage(msg)
+	}
+}
+
 // processNode is the inner process loop for the node.
 func (n *Node) processNode(proc goprocess.Process) {
 	ctx := n.ctx
@@ -199,6 +239,9 @@ func (n *Node) processNode(proc goprocess.Process) {
 	errCh := make(chan error, 5)
 	go func() {
 		errCh <- n.proposer.ManageProposer(ctx)
+	}()
+	go func() {
+		errCh <- n.processPubSub()
 	}()
 
 	for {

@@ -3,6 +3,7 @@ package encryption
 import (
 	"github.com/aperturerobotics/inca"
 	"github.com/aperturerobotics/pbobject"
+	"github.com/libp2p/go-libp2p-crypto"
 )
 
 // Strategy is a blockchain encryption implementation strategy.
@@ -16,7 +17,7 @@ type Strategy interface {
 	// GetGenesisEncryptionConfigWithDigest returns the encryption configuration for the genesis block with a digest.
 	GetGenesisEncryptionConfigWithDigest(digest []byte) pbobject.EncryptionConfig
 	// GetNodeMessageEncryptionConfig returns the encryption configuration for encrypting a node message.
-	GetNodeMessageEncryptionConfig() pbobject.EncryptionConfig
+	GetNodeMessageEncryptionConfig(privKey crypto.PrivKey) pbobject.EncryptionConfig
 	// GetNodeMessageEncryptionConfigWithDigest returns the encryption configuration for the node message with a digest.
 	GetNodeMessageEncryptionConfigWithDigest(digest []byte) pbobject.EncryptionConfig
 	// GetBlockEncryptionConfig returns the encryption configuration for block messages.

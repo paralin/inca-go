@@ -95,6 +95,11 @@ func GetNode() (*node.Node, error) {
 		return nil, err
 	}
 
+	msg := &inca.Genesis{}
+	if err := nod.SendMessage(ctx, inca.NodeMessageType_NodeMessageType_UNKNOWN, msg); err != nil {
+		return nil, err
+	}
+
 	nodeCached = nod
 	return nod, nil
 }

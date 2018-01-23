@@ -11,6 +11,7 @@ import (
 	"github.com/aperturerobotics/objectenc/secretbox"
 	"github.com/aperturerobotics/objstore/localdb"
 	"github.com/aperturerobotics/pbobject"
+	"github.com/libp2p/go-libp2p-crypto"
 	"github.com/pkg/errors"
 )
 
@@ -127,8 +128,10 @@ func (s *Strategy) GetGenesisEncryptionConfigWithDigest(digest []byte) pbobject.
 }
 
 // GetNodeMessageEncryptionConfig returns the encryption configuration for the node message.
-func (s *Strategy) GetNodeMessageEncryptionConfig() pbobject.EncryptionConfig {
-	return s.GetEncryptionConfig()
+func (s *Strategy) GetNodeMessageEncryptionConfig(nodePriv crypto.PrivKey) pbobject.EncryptionConfig {
+	c := s.GetEncryptionConfig()
+	c.SignerKeys = append(c.SignerKeys, nodePriv)
+	return c
 }
 
 // GetGenesisEncryptionConfigWithDigest returns the encryption configuration for the genesis block with a digest.
