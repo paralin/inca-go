@@ -96,10 +96,6 @@ func NewNode(
 		return nil, err
 	}
 
-	if _, err := peerStore.GetPeerWithPubKey(privKey.GetPublic()); err != nil {
-		return nil, err
-	}
-
 	// start listening on pubsub
 	if err := n.initPubSub(); err != nil {
 		return nil, err
@@ -199,6 +195,7 @@ func (n *Node) pubsubSendMsg(msg *inca.NodeMessage) error {
 		return err
 	}
 
+	n.le.WithField("msg-type", msg.GetMessageType().String()).Debug("sent node message")
 	return nil
 }
 
@@ -228,6 +225,10 @@ func (n *Node) processPubSub() error {
 		peerId, err := lpeer.IDB58Decode(msg.GetPeerId())
 		if err != nil {
 			le.WithError(err).Warn("pub-sub message ignoring invalid peer id")
+			continue
+		}
+
+		if peerId.MatchesPrivateKey(n.privKey) {
 			continue
 		}
 
