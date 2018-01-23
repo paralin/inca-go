@@ -7,11 +7,13 @@ Package chain is a generated protocol buffer package.
 It is generated from these files:
 	github.com/aperturerobotics/inca-go/chain/chain.proto
 	github.com/aperturerobotics/inca-go/chain/chain_config.proto
+	github.com/aperturerobotics/inca-go/chain/proposer.proto
 	github.com/aperturerobotics/inca-go/chain/segment.proto
 
 It has these top-level messages:
 	ChainState
 	Config
+	ProposerState
 	SegmentState
 */
 package chain

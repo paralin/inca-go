@@ -38,6 +38,7 @@ type Chain struct {
 	le                  *logrus.Entry
 	state               ChainState
 	recheckStateTrigger chan struct{}
+	pubsubTopic         string
 }
 
 // NewChain builds a new blockchain from scratch, minting a genesis block and committing it to IPFS.
@@ -100,6 +101,7 @@ func NewChain(
 	ch.SegmentStore = NewSegmentStore(ctx, ch, idb.WithPrefix(dbm, []byte(fmt.Sprintf("/chain/%s/segments", ch.genesis.GetChainId()))))
 	conf.EncryptionArgs = argsObjectWrapper
 	ch.encStrat = strat
+	ch.computePubsubTopic()
 
 	validatorPub := validatorPriv.GetPublic()
 	validatorPubBytes, err := validatorPub.Bytes()
@@ -223,6 +225,7 @@ func FromConfig(
 		recheckStateTrigger: make(chan struct{}, 1),
 	}
 	ch.SegmentStore = NewSegmentStore(ctx, ch, idb.WithPrefix(dbm, []byte(fmt.Sprintf("/chain/%s/segments", ch.genesis.GetChainId()))))
+	ch.computePubsubTopic()
 
 	if err := ch.readState(ctx); err != nil {
 		return nil, errors.WithMessage(err, "cannot load state from db")
@@ -234,7 +237,7 @@ func FromConfig(
 
 // GetPubsubTopic returns the pubsub topic name.
 func (c *Chain) GetPubsubTopic() string {
-	return base64.StdEncoding.EncodeToString(c.conf.GetGenesisRef().GetObjectDigest())
+	return c.pubsubTopic
 }
 
 // GetConfig returns a copy of the chain config.
@@ -360,4 +363,8 @@ func (c *Chain) triggerStateRecheck() {
 	case c.recheckStateTrigger <- struct{}{}:
 	default:
 	}
+}
+
+func (c *Chain) computePubsubTopic() {
+	c.pubsubTopic = base64.StdEncoding.EncodeToString(c.conf.GetGenesisRef().GetObjectDigest())
 }

@@ -39,7 +39,7 @@ var SegmentStatus_value = map[string]int32{
 func (x SegmentStatus) String() string {
 	return proto.EnumName(SegmentStatus_name, int32(x))
 }
-func (SegmentStatus) EnumDescriptor() ([]byte, []int) { return fileDescriptor2, []int{0} }
+func (SegmentStatus) EnumDescriptor() ([]byte, []int) { return fileDescriptor3, []int{0} }
 
 // SegmentState tracks state of a Segment.
 type SegmentState struct {
@@ -61,7 +61,7 @@ type SegmentState struct {
 func (m *SegmentState) Reset()                    { *m = SegmentState{} }
 func (m *SegmentState) String() string            { return proto.CompactTextString(m) }
 func (*SegmentState) ProtoMessage()               {}
-func (*SegmentState) Descriptor() ([]byte, []int) { return fileDescriptor2, []int{0} }
+func (*SegmentState) Descriptor() ([]byte, []int) { return fileDescriptor3, []int{0} }
 
 func (m *SegmentState) GetId() string {
 	if m != nil {
@@ -111,10 +111,10 @@ func init() {
 }
 
 func init() {
-	proto.RegisterFile("github.com/aperturerobotics/inca-go/chain/segment.proto", fileDescriptor2)
+	proto.RegisterFile("github.com/aperturerobotics/inca-go/chain/segment.proto", fileDescriptor3)
 }
 
-var fileDescriptor2 = []byte{
+var fileDescriptor3 = []byte{
 	// 297 bytes of a gzipped FileDescriptorProto
 	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x8c, 0xd1, 0x4d, 0x4b, 0xf3, 0x40,
 	0x10, 0x07, 0xf0, 0x27, 0x79, 0x6c, 0xa1, 0xdb, 0x5a, 0xca, 0xfa, 0xb6, 0x8a, 0x87, 0xe2, 0xa9,
