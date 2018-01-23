@@ -135,8 +135,10 @@ func (s *Strategy) GetNodeMessageEncryptionConfig(nodePriv crypto.PrivKey) pbobj
 }
 
 // GetGenesisEncryptionConfigWithDigest returns the encryption configuration for the genesis block with a digest.
-func (s *Strategy) GetNodeMessageEncryptionConfigWithDigest(digest []byte) pbobject.EncryptionConfig {
-	return s.GetEncryptionConfigWithDigest(digest)
+func (s *Strategy) GetNodeMessageEncryptionConfigWithDigest(pubKey crypto.PubKey, digest []byte) pbobject.EncryptionConfig {
+	encConf := s.GetEncryptionConfigWithDigest(digest)
+	encConf.VerifyKeys = append(encConf.VerifyKeys, pubKey)
+	return encConf
 }
 
 // GetBlockEncryptionConfig returns the configuration for block related messages.

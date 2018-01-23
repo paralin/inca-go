@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/Sirupsen/logrus"
 	"github.com/aperturerobotics/inca"
@@ -11,6 +12,7 @@ import (
 	"github.com/aperturerobotics/inca-go/encryption"
 	"github.com/aperturerobotics/objstore"
 	"github.com/aperturerobotics/pbobject"
+	"github.com/golang/protobuf/proto"
 	"github.com/libp2p/go-libp2p-crypto"
 	lpeer "github.com/libp2p/go-libp2p-peer"
 	"github.com/pkg/errors"
@@ -29,15 +31,13 @@ type Peer struct {
 	peerPubKey crypto.PubKey
 	peerID     lpeer.ID
 
+	state         PeerState
 	genesisDigest []byte
 
 	// the following variables are managed by the process loop
-	lastObservedMessage *inca.NodeMessage
-	incomingPubsubCh    chan *inca.ChainPubsubMessage
-	encStrat            encryption.Strategy
+	incomingPubsubCh chan *inca.ChainPubsubMessage
+	encStrat         encryption.Strategy
 }
-
-var lastObservedMessageKey = []byte("/last-observed-message")
 
 // NewPeer builds a new peer object.
 func NewPeer(
@@ -62,7 +62,7 @@ func NewPeer(
 		incomingPubsubCh: make(chan *inca.ChainPubsubMessage, 10),
 		encStrat:         encStrat,
 	}
-	if err := p.loadDbState(ctx); err != nil {
+	if err := p.readState(ctx); err != nil {
 		return nil, err
 	}
 	go p.processPeer()
@@ -94,7 +94,7 @@ func (p *Peer) processIncomingPubsubMessage(pubsubMsg *inca.ChainPubsubMessage) 
 		return errors.New("object digest cannot be empty")
 	}
 
-	encConf := p.encStrat.GetNodeMessageEncryptionConfigWithDigest(msgRef.GetObjectDigest())
+	encConf := p.encStrat.GetNodeMessageEncryptionConfigWithDigest(p.GetPublicKey(), msgRef.GetObjectDigest())
 	subCtx := pbobject.WithEncryptionConf(p.ctx, &encConf)
 
 	nm := &inca.NodeMessage{}
@@ -116,41 +116,63 @@ func (p *Peer) processIncomingNodeMessage(nm *inca.NodeMessage) error {
 	}
 
 	nmTime := nm.GetTimestamp().ToTime()
-	if p.lastObservedMessage != nil {
+	le := p.le.
+		WithField("msg-time", nmTime.String())
+	if p.state.LastObservedMessage != nil {
 		// Rudimentary WIP checks here.
 		// TODO: all of the checks, evidence collection
-		lastNmTime := p.lastObservedMessage.GetTimestamp().ToTime()
+		lastNmTime := p.state.LastObservedMessage.GetTimestamp().ToTime()
 		if lastNmTime.After(nmTime) {
 			return errors.Errorf("old message at %s: latest %s", nmTime.String(), lastNmTime.String())
 		}
+		le = le.WithField("last-msg-time", lastNmTime.String())
 	}
 
 	innerRef := nm.GetInnerRef()
 	_ = innerRef
-	p.le.WithField("msg-time", nmTime.String()).Debug("received pub-sub message")
+	le.WithField("msg-type", nm.GetMessageType().String()).Debug("received node message")
+	p.state.LastObservedMessage = nm
+	if err := p.writeState(p.ctx); err != nil {
+		le.WithError(err).Warn("cannot write peer state")
+	}
+
+	now := time.Now()
+	if nmTime.After(now) {
+		return errors.Errorf("message is in the future by %s", nmTime.Sub(now).String())
+	}
+	if now.Sub(nmTime) > (time.Second * 120) {
+		le.Debug("ignoring too-old message (older than 2 minutes)")
+		return nil
+	}
+
 	return nil
 }
 
-// loadDbState loads the peer state from the database.
-func (p *Peer) loadDbState(ctx context.Context) error {
-	dat, err := p.db.Get(ctx, lastObservedMessageKey)
+// readState loads the peer state from the database.
+func (p *Peer) readState(ctx context.Context) error {
+	dat, err := p.db.Get(ctx, []byte("/state"))
 	if err != nil {
 		return err
 	}
-	if dat != nil {
-		// fetch last observed message from db
-		p.lastObservedMessage = &inca.NodeMessage{}
-		return p.objStore.GetLocal(ctx, dat, p.lastObservedMessage)
+	if dat == nil {
+		return nil
 	}
-	return nil
+	return proto.Unmarshal(dat, &p.state)
+}
+
+// writeState writes the last observed message and other parameters to the db.
+func (p *Peer) writeState(ctx context.Context) error {
+	dat, err := proto.Marshal(&p.state)
+	if err != nil {
+		return err
+	}
+
+	return p.db.Set(ctx, []byte("/state"), dat)
 }
 
 // ProcessNodePubsubMessage processes an incoming node pubsub message.
 // The message may not be from this peer, it needs to be verfied.
 func (p *Peer) ProcessNodePubsubMessage(msg *inca.ChainPubsubMessage) {
-	ref := msg.GetNodeMessageRef()
-	p.le.Debugf("peer pub-sub received with digest: %v", ref.GetObjectDigest())
-
 EnqueueLoop:
 	for {
 		select {
@@ -164,19 +186,6 @@ EnqueueLoop:
 			}
 		}
 	}
-}
-
-// writeDbState writes the last observed message and other parameters to the db.
-func (p *Peer) writeDbState() error {
-	ctx := context.TODO()
-	if p.lastObservedMessage != nil {
-		var hash []byte
-		if err := p.objStore.StoreLocal(ctx, p.lastObservedMessage, &hash, objstore.StoreParams{}); err != nil {
-			return err
-		}
-		return p.db.Set(ctx, lastObservedMessageKey, hash)
-	}
-	return nil
 }
 
 // GetPublicKey returns the peer public key.
