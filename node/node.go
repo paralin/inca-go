@@ -61,7 +61,13 @@ func NewNode(
 	}
 
 	genesisRef := ch.GetGenesisRef()
-	peerStore := peer.NewPeerStore(ctx, dbm, objStore, genesisRef.GetObjectDigest())
+	peerStore := peer.NewPeerStore(
+		ctx,
+		dbm,
+		objStore,
+		genesisRef.GetObjectDigest(),
+		ch.GetEncryptionStrategy(),
+	)
 
 	nodeAddr, err := lpeer.IDFromPrivateKey(privKey)
 	if err != nil {
@@ -87,6 +93,10 @@ func NewNode(
 	}
 
 	if err := n.readState(); err != nil {
+		return nil, err
+	}
+
+	if _, err := peerStore.GetPeerWithPubKey(privKey.GetPublic()); err != nil {
 		return nil, err
 	}
 
@@ -227,6 +237,7 @@ func (n *Node) processPubSub() error {
 			le.WithError(err).Warn("pub-sub message ignoring unknown peer id")
 			continue
 		}
+
 		peer.ProcessNodePubsubMessage(msg)
 	}
 }

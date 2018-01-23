@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/aperturerobotics/inca-go/db"
+	"github.com/aperturerobotics/inca-go/encryption"
 	"github.com/aperturerobotics/inca-go/logctx"
 	"github.com/aperturerobotics/objstore"
 	"github.com/libp2p/go-libp2p-crypto"
@@ -18,12 +19,25 @@ type PeerStore struct {
 	peers         sync.Map // map[lpeer.ID]*Peer
 	objStore      *objstore.ObjectStore
 	genesisDigest []byte
+	encStrat      encryption.Strategy
 }
 
 // NewPeerStore builds a new peer store, loading the initial set from the db.
-func NewPeerStore(ctx context.Context, dbm db.Db, objStore *objstore.ObjectStore, genesisDigest []byte) *PeerStore {
+func NewPeerStore(
+	ctx context.Context,
+	dbm db.Db,
+	objStore *objstore.ObjectStore,
+	genesisDigest []byte,
+	encStrat encryption.Strategy,
+) *PeerStore {
 	dbm = db.WithPrefix(dbm, []byte("/peers"))
-	return &PeerStore{ctx: ctx, db: dbm, objStore: objStore, genesisDigest: genesisDigest}
+	return &PeerStore{
+		ctx:           ctx,
+		db:            dbm,
+		objStore:      objStore,
+		genesisDigest: genesisDigest,
+		encStrat:      encStrat,
+	}
 }
 
 // GetPeer gets a peer from the store.
@@ -43,7 +57,7 @@ func (ps *PeerStore) GetPeerWithPubKey(pubKey crypto.PubKey) (*Peer, error) {
 	}
 
 	le := logctx.GetLogEntry(ps.ctx)
-	p, err := NewPeer(ps.ctx, le, ps.db, ps.objStore, pubKey, ps.genesisDigest)
+	p, err := NewPeer(ps.ctx, le, ps.db, ps.objStore, pubKey, ps.genesisDigest, ps.encStrat)
 	if err != nil {
 		return nil, err
 	}
