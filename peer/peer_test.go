@@ -8,6 +8,7 @@ import (
 	"github.com/Sirupsen/logrus"
 	"github.com/aperturerobotics/inca"
 	"github.com/aperturerobotics/inca-go/db"
+	"github.com/aperturerobotics/inca-go/encryption/convergentimmutable"
 	"github.com/aperturerobotics/objstore"
 	"github.com/aperturerobotics/objstore/ipfs"
 	"github.com/aperturerobotics/objstore/localdb"
@@ -43,7 +44,12 @@ func TestPeer(t *testing.T) {
 		t.Fatal(err.Error())
 	}
 
-	p, err := NewPeer(ctx, le, dbm, objStore, nodePub, genesisDigest)
+	encStrat, err := convergentimmutable.NewConvergentImmutableStrategy()
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+
+	p, err := NewPeer(ctx, le, dbm, objStore, nodePub, genesisDigest, encStrat)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
@@ -54,7 +60,9 @@ func TestPeer(t *testing.T) {
 		Timestamp:   &nowTs,
 		MessageType: inca.NodeMessageType_NodeMessageType_UNKNOWN,
 	}
-	p.ProcessNodeMessage(nodeMessage)
+	if err := p.processIncomingNodeMessage(nodeMessage); err != nil {
+		t.Fatal(err.Error())
+	}
 	_ = p
 	_ = nodePriv
 }

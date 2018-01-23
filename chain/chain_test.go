@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"testing"
 
-	"github.com/Sirupsen/logrus"
 	"github.com/aperturerobotics/inca-go/db"
 	"github.com/aperturerobotics/objstore"
 	"github.com/aperturerobotics/objstore/ipfs"
@@ -50,9 +49,7 @@ func TestChain(t *testing.T) {
 		ch = chAfter
 	}
 
-	logger := logrus.New()
-	le := logrus.NewEntry(logger)
-	proposer, err := NewProposer(le, validatorPriv, dbm, ch)
+	proposer, err := NewProposer(ctx, validatorPriv, dbm, ch)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
