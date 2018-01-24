@@ -1,0 +1,9 @@
+syntax = "proto3";
+package chain;
+
+import "github.com/aperturerobotics/inca/inca.proto";
+
+// ValidatorState is state for a validator.
+message ValidatorState {
+  inca.BlockRoundInfo last_vote = 1;
+}

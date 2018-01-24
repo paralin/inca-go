@@ -12,7 +12,7 @@ import (
 	"github.com/aperturerobotics/inca-go/logctx"
 	"github.com/aperturerobotics/inca-go/peer"
 	"github.com/aperturerobotics/objstore"
-	"github.com/aperturerobotics/pbobject"
+	"github.com/aperturerobotics/storageref"
 	"github.com/aperturerobotics/timestamp"
 	"github.com/golang/protobuf/proto"
 	"github.com/jbenet/goprocess"
@@ -61,34 +61,38 @@ func NewNode(
 	}
 
 	genesisRef := ch.GetGenesisRef()
-	peerStore := peer.NewPeerStore(
-		ctx,
-		dbm,
-		objStore,
-		genesisRef.GetObjectDigest(),
-		ch.GetEncryptionStrategy(),
-	)
-
 	nodeAddr, err := lpeer.IDFromPrivateKey(privKey)
 	if err != nil {
 		return nil, err
 	}
 
 	n := &Node{
-		ctx:       ctx,
-		shell:     shell,
-		le:        le,
-		chain:     ch,
-		db:        db.WithPrefix(dbm, []byte(fmt.Sprintf("/node/%s", nodeAddr.Pretty()))),
-		privKey:   privKey,
-		objStore:  objStore,
-		peerStore: peerStore,
-		nodeAddr:  nodeAddr,
-		outboxCh:  make(chan *inca.NodeMessage),
+		ctx:      ctx,
+		shell:    shell,
+		le:       le,
+		chain:    ch,
+		db:       db.WithPrefix(dbm, []byte(fmt.Sprintf("/node/%s", nodeAddr.Pretty()))),
+		privKey:  privKey,
+		objStore: objStore,
+		nodeAddr: nodeAddr,
+		outboxCh: make(chan *inca.NodeMessage),
 	}
 
-	n.proposer, err = chain.NewProposer(ctx, privKey, dbm, ch)
+	n.peerStore = peer.NewPeerStore(
+		ctx,
+		dbm,
+		objStore,
+		genesisRef.GetObjectDigest(),
+		ch.GetEncryptionStrategy(),
+		n,
+	)
+
+	n.proposer, err = chain.NewProposer(ctx, privKey, dbm, ch, n, n.peerStore)
 	if err != nil {
+		return nil, err
+	}
+
+	if _, err := n.peerStore.GetPeerWithPubKey(privKey.GetPublic()); err != nil {
 		return nil, err
 	}
 
@@ -136,21 +140,13 @@ func (n *Node) GetProcess() goprocess.Process {
 }
 
 // SendMessage submits a message to the node pubsub.
-func (n *Node) SendMessage(ctx context.Context, msgType inca.NodeMessageType, msgInner pbobject.Object) error {
+func (n *Node) SendMessage(ctx context.Context, msgType inca.NodeMessageType, msgInnerRef *storageref.StorageRef) error {
 	// Build the NodeMessage object
 	nm := &inca.NodeMessage{
 		MessageType: msgType,
 		GenesisRef:  n.chain.GetGenesisRef(),
+		InnerRef:    msgInnerRef,
 	}
-	sref, _, err := n.objStore.StoreObject(
-		ctx,
-		nm,
-		n.chain.GetEncryptionStrategy().GetNodeMessageEncryptionConfig(n.privKey),
-	)
-	if err != nil {
-		return err
-	}
-	nm.InnerRef = sref
 
 	select {
 	case n.outboxCh <- nm:
@@ -158,6 +154,11 @@ func (n *Node) SendMessage(ctx context.Context, msgType inca.NodeMessageType, ms
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// HandleBlockCommit handles an incoming block commit.
+func (n *Node) HandleBlockCommit(p *peer.Peer, blockRef *storageref.StorageRef, block *inca.Block) {
+	//
 }
 
 // pubsubSendMsg actually emits a node message to the pubsub channel.
@@ -225,10 +226,6 @@ func (n *Node) processPubSub() error {
 		peerId, err := lpeer.IDB58Decode(msg.GetPeerId())
 		if err != nil {
 			le.WithError(err).Warn("pub-sub message ignoring invalid peer id")
-			continue
-		}
-
-		if peerId.MatchesPrivateKey(n.privKey) {
 			continue
 		}
 

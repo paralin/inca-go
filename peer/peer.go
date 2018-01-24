@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/Sirupsen/logrus"
@@ -12,6 +13,7 @@ import (
 	"github.com/aperturerobotics/inca-go/encryption"
 	"github.com/aperturerobotics/objstore"
 	"github.com/aperturerobotics/pbobject"
+	"github.com/aperturerobotics/storageref"
 	"github.com/golang/protobuf/proto"
 	"github.com/libp2p/go-libp2p-crypto"
 	lpeer "github.com/libp2p/go-libp2p-peer"
@@ -37,6 +39,15 @@ type Peer struct {
 	// the following variables are managed by the process loop
 	incomingPubsubCh chan *inca.ChainPubsubMessage
 	encStrat         encryption.Strategy
+
+	msgSubs sync.Map
+	handler PeerHandler
+}
+
+// PeerHandler handles peer events.
+type PeerHandler interface {
+	// HandleBlockCommit handles an incoming block.
+	HandleBlockCommit(p *Peer, blockRef *storageref.StorageRef, block *inca.Block)
 }
 
 // NewPeer builds a new peer object.
@@ -48,6 +59,7 @@ func NewPeer(
 	pubKey crypto.PubKey,
 	genesisDigest []byte,
 	encStrat encryption.Strategy,
+	handler PeerHandler,
 ) (*Peer, error) {
 	peerID, _ := lpeer.IDFromPublicKey(pubKey)
 	db = dbm.WithPrefix(db, []byte(fmt.Sprintf("/%s", peerID.Pretty())))
@@ -58,6 +70,7 @@ func NewPeer(
 		peerPubKey:       pubKey,
 		peerID:           peerID,
 		objStore:         objStore,
+		handler:          handler,
 		genesisDigest:    genesisDigest,
 		incomingPubsubCh: make(chan *inca.ChainPubsubMessage, 10),
 		encStrat:         encStrat,
@@ -145,6 +158,19 @@ func (p *Peer) processIncomingNodeMessage(nm *inca.NodeMessage) error {
 		return nil
 	}
 
+	if nm.GetMessageType() == inca.NodeMessageType_NodeMessageType_BLOCK_COMMIT {
+		block := &inca.Block{}
+		blockRef := nm.GetInnerRef()
+		encConf := p.encStrat.GetBlockEncryptionConfigWithDigest(blockRef.GetObjectDigest())
+		subCtx := pbobject.WithEncryptionConf(p.ctx, &encConf)
+		if err := blockRef.FollowRef(subCtx, blockRef.GetObjectDigest(), block); err != nil {
+			return err
+		}
+
+		go p.handler.HandleBlockCommit(p, blockRef, block)
+	}
+
+	p.emitNextNodeMessage(nm)
 	return nil
 }
 
@@ -191,4 +217,9 @@ EnqueueLoop:
 // GetPublicKey returns the peer public key.
 func (p *Peer) GetPublicKey() crypto.PubKey {
 	return p.peerPubKey
+}
+
+// GetPeerID returns the peer id.
+func (p *Peer) GetPeerID() lpeer.ID {
+	return p.peerID
 }

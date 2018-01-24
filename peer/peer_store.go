@@ -20,6 +20,7 @@ type PeerStore struct {
 	objStore      *objstore.ObjectStore
 	genesisDigest []byte
 	encStrat      encryption.Strategy
+	handler       PeerHandler
 }
 
 // NewPeerStore builds a new peer store, loading the initial set from the db.
@@ -29,6 +30,7 @@ func NewPeerStore(
 	objStore *objstore.ObjectStore,
 	genesisDigest []byte,
 	encStrat encryption.Strategy,
+	handler PeerHandler,
 ) *PeerStore {
 	dbm = db.WithPrefix(dbm, []byte("/peers"))
 	return &PeerStore{
@@ -37,6 +39,7 @@ func NewPeerStore(
 		objStore:      objStore,
 		genesisDigest: genesisDigest,
 		encStrat:      encStrat,
+		handler:       handler,
 	}
 }
 
@@ -57,7 +60,7 @@ func (ps *PeerStore) GetPeerWithPubKey(pubKey crypto.PubKey) (*Peer, error) {
 	}
 
 	le := logctx.GetLogEntry(ps.ctx)
-	p, err := NewPeer(ps.ctx, le, ps.db, ps.objStore, pubKey, ps.genesisDigest, ps.encStrat)
+	p, err := NewPeer(ps.ctx, le, ps.db, ps.objStore, pubKey, ps.genesisDigest, ps.encStrat, ps.handler)
 	if err != nil {
 		return nil, err
 	}

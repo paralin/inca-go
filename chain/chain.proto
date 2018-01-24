@@ -7,4 +7,8 @@ import "github.com/aperturerobotics/storageref/storageref.proto";
 message ChainState {
   // StateSegmentRef is the current active segment used for state.
   storageref.StorageRef state_segment_ref = 1;
+  // LastHeight is the last processed height.
+  uint64 last_height = 2;
+  // LastRound is the last processed round.
+  uint64 last_round = 3;
 }

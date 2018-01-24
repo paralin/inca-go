@@ -3,6 +3,7 @@ package chain
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"fmt"
 	"sync"
@@ -51,6 +52,7 @@ type Chain struct {
 	lastHeadDigest  []byte
 	lastBlock       *inca.Block
 	lastBlockHeader *inca.BlockHeader
+	lastBlockRef    *storageref.StorageRef
 }
 
 // NewChain builds a new blockchain from scratch, minting a genesis block and committing it to IPFS.
@@ -121,11 +123,19 @@ func NewChain(
 		return nil, err
 	}
 
+	_, randPub, _ := crypto.GenerateEd25519Key(rand.Reader)
+	randPubBytes, _ := randPub.Bytes()
+
 	validatorSet := &inca.ValidatorSet{
 		Validators: []*inca.Validator{
 			&inca.Validator{
 				PubKey:        validatorPubBytes,
 				VotingPower:   10,
+				OperationMode: inca.Validator_OperationMode_OPERATING,
+			},
+			&inca.Validator{
+				PubKey:        randPubBytes,
+				VotingPower:   3,
 				OperationMode: inca.Validator_OperationMode_OPERATING,
 			},
 		},
@@ -143,6 +153,7 @@ func NewChain(
 		TimingConfig: &inca.TimingConfig{
 			MinProposeAfterBlock: 500,
 			MaxProposeAfterBlock: 10000,
+			RoundLength:          3000,
 		},
 		ValidatorSetRef: validatorSetStorageRef,
 	}
@@ -356,15 +367,55 @@ func (c *Chain) manageState() {
 	defer ctxCancel()
 
 	// Main state update loop
+	lastNextCheckTime := time.Now().Add(time.Second * 5)
+	nextCheckTimer := time.NewTimer(time.Second * 5)
+	var nextCheckCh <-chan time.Time
 	for {
 		if err := c.manageStateOnce(ctx); err != nil {
 			c.le.WithError(err).Warn("chain management errored")
+		}
+
+		now := time.Now()
+		nextCheckTime := lastNextCheckTime
+		// Check at minimum every 10s
+		if !nextCheckTime.After(now) {
+			nextCheckTime = now.Add(time.Second * 10)
+		}
+
+		state := c.lastStateSnapshot
+		c.le.Debugf("state set: %v", state != nil)
+		if state != nil {
+			proposerId, _, _ := state.CurrentProposer.ParsePeerID()
+			c.le.Debugf("%s proposer: %s", state.BlockRoundInfo.String(), proposerId.Pretty())
+			c.le.Debugf("now: %v round end: %v next round start: %v", now, state.RoundEndTime, state.NextRoundStartTime)
+			if nextCheckTime.After(state.RoundEndTime) && state.RoundEndTime.After(now) {
+				nextCheckTime = state.RoundEndTime
+			}
+			if nextCheckTime.After(state.NextRoundStartTime) {
+				nextCheckTime = state.NextRoundStartTime
+			}
+		}
+
+		if !nextCheckTime.Equal(lastNextCheckTime) {
+			if !nextCheckTimer.Stop() {
+				select {
+				case <-nextCheckCh:
+				default:
+				}
+			}
+
+			nextCheckDur := nextCheckTime.Sub(now)
+			nextCheckTimer.Reset(nextCheckDur)
+			nextCheckCh = nextCheckTimer.C
+			c.le.Debugf("next check in %s", nextCheckDur)
+			lastNextCheckTime = nextCheckTime
 		}
 
 		select {
 		case <-ctx.Done():
 			return
 		case <-c.recheckStateTrigger:
+		case <-nextCheckCh:
 		}
 	}
 }
@@ -418,19 +469,126 @@ func (c *Chain) manageStateOnce(ctx context.Context) error {
 
 		now := time.Now()
 		headBlockTs := headBlockHeader.GetBlockTs().ToTime()
+		headStr := headBlockHeader.GetRoundInfo().String()
+		if headStr == "" {
+			headStr = "genesis"
+		}
 		c.le.
-			WithField("head", headBlockHeader.GetRoundInfo().String()).
+			WithField("head", headStr).
 			WithField("block-ipfs-ref", headBlock.GetBlockHeaderRef().GetIpfs().GetObjectHash()).
 			WithField("block-time-ago", now.Sub(headBlockTs).String()).
 			Debug("head block updated")
 		c.lastBlock = headBlock
 		c.lastBlockHeader = headBlockHeader
+		c.lastBlockRef = segmentState.GetHeadBlock()
+		c.lastHeadDigest = headDigest
 
-		// TODO: update blockchain state, emit state snapshot update
-		// Compute current height and round and when the round will end
-		// stateSnap := &ChainStateSnapshot{}
 	}
 
+	if err := c.computeEmitSnapshot(ctx); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// computeEmitSnapshot computes the current state snapshot and emits it again if necessary.
+func (c *Chain) computeEmitSnapshot(ctx context.Context) error {
+	if c.lastBlockHeader == nil {
+		return nil
+	}
+
+	lastHeight := c.state.GetLastHeight()
+	lastRoundInfo := c.lastBlockHeader.GetRoundInfo()
+	if lastRoundInfo.GetHeight() > lastHeight {
+		c.state.LastHeight = lastRoundInfo.GetHeight()
+		c.state.LastRound = 0
+	}
+
+	// compute expected round
+	lastBlockTs := c.lastBlockHeader.GetBlockTs().ToTime()
+	nowTs := time.Now()
+	if lastBlockTs.After(nowTs) {
+		return errors.New("last block was in the future")
+	}
+	sinceLastBlock := nowTs.Sub(lastBlockTs)
+
+	chainConfig := &inca.ChainConfig{}
+	{
+		encConf := c.encStrat.GetBlockEncryptionConfigWithDigest(
+			c.lastBlockHeader.GetNextChainConfigRef().GetObjectDigest(),
+		)
+		subCtx := pbobject.WithEncryptionConf(ctx, &encConf)
+		err := c.lastBlockHeader.GetNextChainConfigRef().FollowRef(subCtx, nil, chainConfig)
+		if err != nil {
+			return err
+		}
+	}
+
+	roundDuration := time.Duration(chainConfig.GetTimingConfig().GetRoundLength()) * time.Millisecond
+	if roundDuration < (1 * time.Second) {
+		return errors.Errorf("configured round duration too short: %s", roundDuration.String())
+	}
+
+	expectedRoundCount := uint64(sinceLastBlock / roundDuration)
+	currRound := c.state.LastRound
+	if expectedRoundCount > currRound {
+		currRound = expectedRoundCount
+	}
+
+	roundStartDuration := time.Millisecond * time.Duration(chainConfig.GetTimingConfig().GetMinProposeAfterBlock())
+	c.state.LastRound = currRound
+	roundStartTime := lastBlockTs.Add(roundStartDuration + (roundDuration * time.Duration(currRound)))
+	roundEndTime := roundStartTime.Add(
+		roundDuration,
+	)
+	nextRoundStartTime := roundEndTime.Add(roundDuration)
+	currRoundInfo := &inca.BlockRoundInfo{
+		Height: c.state.LastHeight,
+		Round:  c.state.LastRound,
+	}
+
+	// Compute current proposer
+	validatorSet := &inca.ValidatorSet{}
+	{
+		encConf := c.encStrat.GetBlockEncryptionConfigWithDigest(
+			chainConfig.GetValidatorSetRef().GetObjectDigest(),
+		)
+		subCtx := pbobject.WithEncryptionConf(ctx, &encConf)
+		err := chainConfig.GetValidatorSetRef().FollowRef(subCtx, nil, validatorSet)
+		if err != nil {
+			return err
+		}
+	}
+
+	validatorSet.SortValidators()
+	proposer, powerSum := validatorSet.SelectProposer(c.lastHeadDigest, currRoundInfo.Height, currRoundInfo.Round)
+
+	currentSnap := &ChainStateSnapshot{
+		BlockRoundInfo:     currRoundInfo,
+		RoundStartTime:     roundStartTime,
+		RoundEndTime:       roundEndTime,
+		NextRoundStartTime: nextRoundStartTime,
+		CurrentProposer:    proposer,
+		LastBlockHeader:    c.lastBlockHeader,
+		LastBlockRef:       c.lastBlockRef,
+		TotalVotingPower:   powerSum,
+		ChainConfig:        chainConfig,
+		ValidatorSet:       validatorSet,
+	}
+	lastSnap := c.lastStateSnapshot
+	if lastSnap != nil {
+		switch {
+		case lastSnap.BlockRoundInfo.Round != currRoundInfo.Round:
+		case lastSnap.BlockRoundInfo.Height != currRoundInfo.Height:
+		case !lastSnap.RoundEndTime.Equal(roundEndTime):
+		case lastSnap.CurrentProposer == nil || bytes.Compare(lastSnap.CurrentProposer.PubKey, proposer.GetPubKey()) != 0:
+		default:
+			return nil
+		}
+	}
+
+	c.emitNextChainState(currentSnap)
 	return nil
 }
 
