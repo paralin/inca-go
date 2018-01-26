@@ -206,3 +206,8 @@ func (b *Block) ValidateChild(ctx context.Context, child *Block) error {
 
 	return nil
 }
+
+// GetBlockRef returns the block ref.
+func (b *Block) GetBlockRef() *storageref.StorageRef {
+	return b.blkRef
+}

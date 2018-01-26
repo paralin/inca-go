@@ -5,15 +5,24 @@ import (
 	"github.com/urfave/cli"
 )
 
+var createInitNodeConfig bool
+
 func init() {
 	incaCommands = append(incaCommands, cli.Command{
-		Name:   "node",
-		Usage:  "run a light node",
-		Action: buildProcessAction(cmdLightNode),
+		Name:  "node",
+		Usage: "run a node",
+		Flags: []cli.Flag{
+			cli.BoolFlag{
+				Name:        "init-node-config",
+				Usage:       "If set, node_config.json will be created if it doesn't exist.",
+				Destination: &createInitNodeConfig,
+			},
+		},
+		Action: buildProcessAction(cmdNode),
 	})
 }
 
-func cmdLightNode(p goprocess.Process) error {
+func cmdNode(p goprocess.Process) error {
 	nod, err := GetNode()
 	if err != nil {
 		return err

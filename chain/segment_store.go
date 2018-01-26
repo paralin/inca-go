@@ -18,25 +18,55 @@ import (
 
 // SegmentStore keeps track of Segments in memory.
 type SegmentStore struct {
-	ctx        context.Context
-	le         *logrus.Entry
-	ch         *Chain
-	segmentMap sync.Map
-	dbm        db.Db
-	segmentDbm db.Db
-	objStore   *objstore.ObjectStore
+	ctx             context.Context
+	le              *logrus.Entry
+	ch              *Chain
+	segmentMap      sync.Map
+	dbm             db.Db
+	segmentDbm      db.Db
+	objStore        *objstore.ObjectStore
+	segmentQueue    *SegmentQueue
+	segmentNotifyCh <-chan *Segment
 }
 
 // NewSegmentStore builds a new SegmentStore.
 func NewSegmentStore(ctx context.Context, ch *Chain, dbm db.Db, objStore *objstore.ObjectStore) *SegmentStore {
 	le := logctx.GetLogEntry(ctx)
+	segmentNotifyCh := make(chan *Segment, 5)
 	return &SegmentStore{
-		ctx:        ctx,
-		ch:         ch,
-		dbm:        dbm,
-		segmentDbm: db.WithPrefix(dbm, []byte("/segments")),
-		objStore:   objStore,
-		le:         le,
+		ctx:             ctx,
+		ch:              ch,
+		dbm:             dbm,
+		segmentDbm:      db.WithPrefix(dbm, []byte("/segments")),
+		objStore:        objStore,
+		le:              le,
+		segmentNotifyCh: segmentNotifyCh,
+		segmentQueue:    NewSegmentQueue(segmentNotifyCh),
+	}
+}
+
+// manageSegmentStore manages the segment store.
+func (s *SegmentStore) manageSegmentStore(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.segmentNotifyCh:
+		}
+
+		nextSeg := s.segmentQueue.Pop()
+		if nextSeg == nil {
+			continue
+		}
+
+		if err := nextSeg.RewindOnce(ctx, s); err != nil {
+			s.le.WithError(err).Warn("issue rewinding segment")
+			continue
+		}
+
+		if nextSeg.state.GetStatus() == SegmentStatus_SegmentStatus_DISJOINTED {
+			s.segmentQueue.Push(nextSeg)
+		}
 	}
 }
 
@@ -111,7 +141,13 @@ func (s *SegmentStore) NewSegment(ctx context.Context, blk *block.Block, blkRef 
 	seg.state.HeadBlock = blkRef
 	seg.state.Status = SegmentStatus_SegmentStatus_DISJOINTED
 	seg.state.TailBlock = blkRef
+	seg.state.TailBlockRound = blk.GetHeader().GetRoundInfo()
 	if err := seg.writeState(ctx); err != nil {
+		return nil, err
+	}
+
+	blk.State.SegmentId = segmentID
+	if err := blk.WriteState(ctx); err != nil {
 		return nil, err
 	}
 

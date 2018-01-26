@@ -1,6 +1,7 @@
 package chain
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -238,9 +239,20 @@ func (p *Validator) processStateSnapshot(ctx context.Context, nextState *ChainSt
 	}
 
 	if !proposerPubKey.Equals(p.privKey.GetPublic()) {
-		_, err := p.makeVote(ctx, nextState)
-		if err != nil {
-			return err
+		// Check if we are a validator
+		weAreValidator := false
+		for _, validator := range nextState.ValidatorSet.GetValidators() {
+			if bytes.Compare(p.pubKeyBytes, validator.GetPubKey()) == 0 {
+				weAreValidator = true
+				break
+			}
+		}
+
+		if weAreValidator {
+			_, err := p.makeVote(ctx, nextState)
+			if err != nil {
+				return err
+			}
 		}
 	}
 

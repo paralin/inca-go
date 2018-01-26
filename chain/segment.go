@@ -89,7 +89,7 @@ func (s *Segment) AppendBlock(ctx context.Context, blkRef *storageref.StorageRef
 		return nil
 	}
 
-	if s.state.GetSegmentNext() != nil {
+	if s.state.GetSegmentNext() != "" {
 		return errors.Errorf("fork: next segment already exists")
 	}
 
@@ -108,6 +108,141 @@ func (s *Segment) AppendBlock(ctx context.Context, blkRef *storageref.StorageRef
 	}
 
 	s.state.HeadBlock = blkRef
+	if err := s.writeState(ctx); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// RewindOnce rewinds the segment once.
+func (s *Segment) RewindOnce(ctx context.Context, segStore *SegmentStore) error {
+	if s.state.GetStatus() != SegmentStatus_SegmentStatus_DISJOINTED {
+		return nil
+	}
+
+	s.le.
+		WithField("segment", s.GetId()).
+		WithField("segment-str", s.state.String()).
+		WithField("tail-height", s.state.GetTailBlockRound().String()).
+		Debug("rewinding once")
+	tailRef := s.state.GetTailBlock()
+	tailBlk, err := block.FollowBlockRef(ctx, tailRef, s.chain.GetEncryptionStrategy())
+	if err != nil {
+		return err
+	}
+
+	tailBlkObj, err := block.GetBlock(ctx, s.chain.GetEncryptionStrategy(), s.chain.GetBlockDbm(), tailRef)
+	if err != nil {
+		return err
+	}
+
+	tailBlkHeader, err := block.FollowBlockHeaderRef(ctx, tailBlk.GetBlockHeaderRef(), s.chain.GetEncryptionStrategy())
+	if err != nil {
+		return err
+	}
+
+	prevBlockRef := tailBlkHeader.GetLastBlockRef()
+	prevBlk, err := block.GetBlock(ctx, s.chain.GetEncryptionStrategy(), s.chain.GetBlockDbm(), prevBlockRef)
+	if err != nil {
+		return err
+	}
+
+	prevSegmentID := prevBlk.GetSegmentId()
+	if prevSegmentID != "" {
+		prevSegment, err := segStore.GetSegmentById(ctx, prevSegmentID)
+		if err != nil {
+			return err
+		}
+
+		if prevSegment == s {
+			return errors.New("previous segment resolved to this segment")
+		}
+
+		return prevSegment.AppendSegment(ctx, s)
+	}
+
+	// Include in this segment
+	prevBlk.SegmentId = s.GetId()
+	prevBlk.NextBlock = tailBlkObj.GetBlockRef()
+	if err := prevBlk.WriteState(ctx); err != nil {
+		return err
+	}
+
+	s.state.TailBlock = prevBlockRef
+	s.state.TailBlockRound = prevBlk.GetHeader().GetRoundInfo()
+
+	if err := prevBlk.ValidateChild(ctx, tailBlkObj); err != nil {
+		s.le.WithError(err).Warn("segment rewound to invalid block, marking as invalid")
+		s.state.Status = SegmentStatus_SegmentStatus_INVALID
+	}
+
+	if s.state.Status == SegmentStatus_SegmentStatus_DISJOINTED {
+		prevBlkRound := prevBlk.GetHeader().GetRoundInfo()
+		// TODO: more checking here.
+		if prevBlkRound.GetHeight() == 0 {
+			if prevBlk.GetHeader().GetChainConfigRef().Equals(s.chain.GetGenesis().GetInitChainConfigRef()) {
+				s.le.Info("traversed to the genesis block, marking segment as valid")
+				s.state.Status = SegmentStatus_SegmentStatus_VALID
+			} else {
+				s.le.Warn("segment terminates at invalid genesis")
+				s.state.Status = SegmentStatus_SegmentStatus_INVALID
+			}
+		}
+	}
+
+	if err := s.writeState(ctx); err != nil {
+		return err
+	}
+
+	if s.state.Status == SegmentStatus_SegmentStatus_VALID {
+		if s.chain.state.GetStateSegment() == "" {
+			s.chain.state.StateSegment = s.state.Id
+			s.chain.triggerStateRecheck()
+		}
+	}
+
+	return nil
+}
+
+// AppendSegment attempts to append a segment to the Segment.
+func (s *Segment) AppendSegment(ctx context.Context, segNext *Segment) error {
+	if segNext.state.GetStatus() != SegmentStatus_SegmentStatus_DISJOINTED {
+		return errors.Errorf("unexpected status: %v", segNext.state.GetStatus())
+	}
+
+	encStrat := s.chain.GetEncryptionStrategy()
+
+	tailRef := segNext.state.GetTailBlock()
+	tailBlk, err := block.GetBlock(ctx, encStrat, s.chain.GetBlockDbm(), tailRef)
+	if err != nil {
+		return err
+	}
+
+	sHeadRef := s.state.GetHeadBlock()
+	sHeadBlk, err := block.GetBlock(ctx, encStrat, s.chain.GetBlockDbm(), sHeadRef)
+	if err != nil {
+		return err
+	}
+
+	if err := sHeadBlk.ValidateChild(ctx, tailBlk); err != nil {
+		segNext.state.Status = SegmentStatus_SegmentStatus_INVALID
+		s.le.
+			WithError(err).
+			WithField("segment", segNext.GetId()).
+			Warn("marking would-be child segment as invalid")
+
+		return segNext.writeState(ctx)
+	}
+
+	s.le.WithField("next-seg", segNext.GetId()).Debug("appended segment")
+	segNext.state.Status = s.state.Status
+	segNext.state.SegmentPrev = s.GetId()
+	if err := segNext.writeState(ctx); err != nil {
+		return err
+	}
+
+	s.state.SegmentNext = segNext.GetId()
 	if err := s.writeState(ctx); err != nil {
 		return err
 	}

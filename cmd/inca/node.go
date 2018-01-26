@@ -1,17 +1,17 @@
 package main
 
 import (
+	"crypto/rand"
 	"io/ioutil"
+	"os"
 	"sync"
-	"time"
 
-	"github.com/aperturerobotics/inca"
 	"github.com/aperturerobotics/inca-go/chain"
 	"github.com/aperturerobotics/inca-go/logctx"
 	"github.com/aperturerobotics/inca-go/node"
 	"github.com/aperturerobotics/objstore"
-	"github.com/aperturerobotics/pbobject"
 	"github.com/golang/protobuf/jsonpb"
+	"github.com/libp2p/go-libp2p-crypto"
 )
 
 var nodeMtx sync.Mutex
@@ -64,30 +64,39 @@ func GetNode() (*node.Node, error) {
 		return nil, err
 	}
 	le.WithField("chain-id", ch.GetGenesis().GetChainId()).Info("blockchain loaded")
-	encStrat := ch.GetEncryptionStrategy()
-
-	{
-		genEncConf := encStrat.GetGenesisEncryptionConfigWithDigest(chainConf.GetGenesisRef().GetObjectDigest())
-		genCtx := pbobject.WithEncryptionConf(ctx, &genEncConf)
-
-		gen := &inca.Genesis{}
-		if err := chainConf.GetGenesisRef().FollowRef(genCtx, nil, gen); err != nil {
-			return nil, err
-		}
-
-		now := time.Now()
-		timeAgo := now.Sub(gen.GetTimestamp().ToTime()).String()
-		le.WithField("minted-time-ago", timeAgo).Info("blockchain genesis loaded")
-	}
 
 	nodeConf := &node.Config{}
 	confDat, err := ioutil.ReadFile(confPath)
-	if err != nil {
-		return nil, err
+	if err == nil {
+		if err := jsonpb.UnmarshalString(string(confDat), nodeConf); err != nil {
+			return nil, err
+		}
 	}
 
-	if err := jsonpb.UnmarshalString(string(confDat), nodeConf); err != nil {
-		return nil, err
+	if err != nil {
+		if createInitNodeConfig && os.IsNotExist(err) {
+			le.Info("minting new identity")
+			privKey, _, err := crypto.GenerateEd25519Key(rand.Reader)
+			if err != nil {
+				return nil, err
+			}
+
+			if err := nodeConf.SetPrivKey(privKey); err != nil {
+				return nil, err
+			}
+
+			jm := &jsonpb.Marshaler{Indent: "  "}
+			jdat, err := jm.MarshalToString(nodeConf)
+			if err != nil {
+				return nil, err
+			}
+
+			if err := ioutil.WriteFile(confPath, []byte(jdat), 0644); err != nil {
+				return nil, err
+			}
+		} else {
+			return nil, err
+		}
 	}
 
 	nod, err := node.NewNode(ctx, dbm, db, sh, ch, nodeConf)

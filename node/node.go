@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"time"
 
 	"github.com/Sirupsen/logrus"
 	"github.com/aperturerobotics/inca"
@@ -12,6 +13,7 @@ import (
 	"github.com/aperturerobotics/inca-go/logctx"
 	"github.com/aperturerobotics/inca-go/peer"
 	"github.com/aperturerobotics/objstore"
+	"github.com/aperturerobotics/pbobject"
 	"github.com/aperturerobotics/storageref"
 	"github.com/aperturerobotics/timestamp"
 	"github.com/golang/protobuf/proto"
@@ -106,6 +108,10 @@ func NewNode(
 		return nil, err
 	}
 
+	if err := n.readGenesisState(ctx); err != nil {
+		return nil, err
+	}
+
 	// start listening on pubsub
 	if err := n.initPubSub(); err != nil {
 		return nil, err
@@ -114,6 +120,60 @@ func NewNode(
 	n.proc = goprocess.Go(n.processNode)
 	n.initCh = make(chan chan error, 1)
 	return n, nil
+}
+
+// readGenesisState attempts to follow the genesis block references.
+func (n *Node) readGenesisState(ctx context.Context) error {
+	encStrat := n.chain.GetEncryptionStrategy()
+
+	gen := &inca.Genesis{}
+	genRef := n.chain.GetGenesisRef()
+	{
+		genEncConf := encStrat.GetGenesisEncryptionConfigWithDigest(genRef.GetObjectDigest())
+		genCtx := pbobject.WithEncryptionConf(ctx, &genEncConf)
+
+		if err := genRef.FollowRef(genCtx, nil, gen); err != nil {
+			return err
+		}
+
+		now := time.Now()
+		timeAgo := now.Sub(gen.GetTimestamp().ToTime()).String()
+		n.le.WithField("minted-time-ago", timeAgo).Info("blockchain genesis loaded")
+	}
+
+	initChainConfig := &inca.ChainConfig{}
+	{
+		confRef := gen.GetInitChainConfigRef()
+		encConf := encStrat.GetBlockEncryptionConfigWithDigest(confRef.GetObjectDigest())
+		subCtx := pbobject.WithEncryptionConf(ctx, &encConf)
+		if err := confRef.FollowRef(subCtx, nil, initChainConfig); err != nil {
+			return err
+		}
+	}
+
+	// Assert that all validators have peers
+	initValidatorSet := &inca.ValidatorSet{}
+	{
+		validatorSetRef := initChainConfig.GetValidatorSetRef()
+		encConf := encStrat.GetBlockEncryptionConfigWithDigest(validatorSetRef.GetObjectDigest())
+		subCtx := pbobject.WithEncryptionConf(ctx, &encConf)
+		if err := validatorSetRef.FollowRef(subCtx, nil, initValidatorSet); err != nil {
+			return err
+		}
+	}
+
+	for _, validator := range initValidatorSet.GetValidators() {
+		validatorPub, err := validator.ParsePublicKey()
+		if err != nil {
+			return err
+		}
+
+		if _, err := n.peerStore.GetPeerWithPubKey(validatorPub); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // readState attempts to read the state out of the db.

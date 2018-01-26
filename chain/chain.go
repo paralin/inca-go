@@ -85,41 +85,6 @@ func NewChain(
 		return nil, err
 	}
 
-	genesisTs := timestamp.Now()
-	genesis := &inca.Genesis{
-		ChainId:     chainID,
-		Timestamp:   &genesisTs,
-		EncStrategy: strat.GetEncryptionStrategyType(),
-	}
-
-	genesisStorageRef, _, err := db.StoreObject(
-		ctx,
-		genesis,
-		strat.GetGenesisEncryptionConfig(),
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	conf := &Config{
-		GenesisRef:         genesisStorageRef,
-		EncryptionStrategy: strat.GetEncryptionStrategyType(),
-	}
-
-	ch := &Chain{
-		ctx:                 ctx,
-		conf:                conf,
-		genesis:             genesis,
-		db:                  db,
-		dbm:                 dbm,
-		le:                  le,
-		recheckStateTrigger: make(chan struct{}, 1),
-	}
-	ch.SegmentStore = NewSegmentStore(ctx, ch, idb.WithPrefix(dbm, []byte(fmt.Sprintf("/chain/%s/segments", ch.genesis.GetChainId()))), db)
-	conf.EncryptionArgs = argsObjectWrapper
-	ch.encStrat = strat
-	ch.computePubsubTopic()
-
 	validatorPub := validatorPriv.GetPublic()
 	validatorPubBytes, err := validatorPub.Bytes()
 	if err != nil {
@@ -165,6 +130,42 @@ func NewChain(
 	if err != nil {
 		return nil, err
 	}
+
+	genesisTs := timestamp.Now()
+	genesis := &inca.Genesis{
+		ChainId:            chainID,
+		Timestamp:          &genesisTs,
+		EncStrategy:        strat.GetEncryptionStrategyType(),
+		InitChainConfigRef: chainConfStorageRef,
+	}
+
+	genesisStorageRef, _, err := db.StoreObject(
+		ctx,
+		genesis,
+		strat.GetGenesisEncryptionConfig(),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	conf := &Config{
+		GenesisRef:         genesisStorageRef,
+		EncryptionStrategy: strat.GetEncryptionStrategyType(),
+	}
+
+	ch := &Chain{
+		ctx:                 ctx,
+		conf:                conf,
+		genesis:             genesis,
+		db:                  db,
+		dbm:                 dbm,
+		le:                  le,
+		recheckStateTrigger: make(chan struct{}, 1),
+	}
+	ch.SegmentStore = NewSegmentStore(ctx, ch, idb.WithPrefix(dbm, []byte(fmt.Sprintf("/chain/%s/segments", ch.genesis.GetChainId()))), db)
+	conf.EncryptionArgs = argsObjectWrapper
+	ch.encStrat = strat
+	ch.computePubsubTopic()
 
 	// build the first block
 	nowTs := timestamp.Now()
@@ -251,6 +252,7 @@ func NewChain(
 	}
 
 	go ch.manageState()
+	go ch.SegmentStore.manageSegmentStore(ctx)
 	return ch, nil
 }
 
@@ -298,8 +300,9 @@ func FromConfig(
 	if err := ch.readState(ctx); err != nil {
 		return nil, errors.WithMessage(err, "cannot load state from db")
 	}
-	go ch.manageState()
 
+	go ch.manageState()
+	go ch.SegmentStore.manageSegmentStore(ctx)
 	return ch, nil
 }
 
@@ -393,8 +396,7 @@ func (c *Chain) HandleBlockCommit(p *peer.Peer, blkRef *storageref.StorageRef, b
 		return err
 	}
 
-	// TODO: schedule segment for rewind
-	c.le.WithField("segment", seg.GetId()).Info("segment needs to be rewound")
+	c.SegmentStore.segmentQueue.Push(seg)
 	return nil
 }
 
@@ -502,18 +504,19 @@ func (c *Chain) manageStateOnce(ctx context.Context) error {
 
 	segmentState := &seg.state
 	// Check if we should fast-forward the segment.
-	if segmentState.GetSegmentNext() != nil {
-		nextSegmentState := &SegmentState{}
-		if err := segmentState.GetSegmentPrev().FollowRef(ctx, nil, nextSegmentState); err != nil {
+	if segmentState.GetSegmentNext() != "" {
+		nextSegment, err := c.GetSegmentById(ctx, segmentState.GetSegmentNext())
+		if err != nil {
 			return err
 		}
 
-		c.state.StateSegment = segmentState.GetId()
+		c.state.StateSegment = segmentState.GetSegmentNext()
 		if err := c.writeState(ctx); err != nil {
 			return err
 		}
 
-		segmentState = nextSegmentState
+		segmentState = &nextSegment.state
+		seg = nextSegment
 	}
 
 	headDigest := segmentState.GetHeadBlock().GetObjectDigest()
