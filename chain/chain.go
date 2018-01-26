@@ -539,7 +539,7 @@ func (c *Chain) manageStateOnce(ctx context.Context) error {
 			WithField("head", headStr).
 			WithField("block-ipfs-ref", headBlock.GetBlockHeaderRef().GetIpfs().GetObjectHash()).
 			WithField("block-time-ago", now.Sub(headBlockTs).String()).
-			Debug("head block updated")
+			Info("head block updated")
 		c.lastBlock = headBlock
 		c.lastBlockHeader = headBlockHeader
 		c.lastBlockRef = segmentState.GetHeadBlock()

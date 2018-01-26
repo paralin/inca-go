@@ -205,7 +205,9 @@ StateLoop:
 			continue
 		}
 
-		p.le.WithField("round-height", nextState.BlockRoundInfo.String()).Info("proposing this round")
+		p.le.
+			WithField("round-height", nextState.BlockRoundInfo.String()).
+			Debug("proposing this round")
 
 		// make the proposal
 		blockHeaderRef, _, err := p.makeProposal(stateCtx, &nextState)
@@ -277,6 +279,8 @@ StateLoop:
 		if err := p.msgSender.SendMessage(stateCtx, inca.NodeMessageType_NodeMessageType_BLOCK_COMMIT, blockStorageRef); err != nil {
 			p.le.WithError(err).Error("unable to send block commit")
 		}
+
+		p.le.Info("committed block")
 	}
 }
 
