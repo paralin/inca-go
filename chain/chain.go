@@ -11,6 +11,7 @@ import (
 
 	"github.com/Sirupsen/logrus"
 	"github.com/aperturerobotics/inca"
+	"github.com/aperturerobotics/inca-go/block"
 	idb "github.com/aperturerobotics/inca-go/db"
 	"github.com/aperturerobotics/inca-go/encryption"
 	"github.com/aperturerobotics/inca-go/encryption/convergentimmutable"
@@ -449,22 +450,14 @@ func (c *Chain) manageStateOnce(ctx context.Context) error {
 
 	headDigest := segmentState.GetHeadBlock().GetObjectDigest()
 	if bytes.Compare(headDigest, c.lastHeadDigest) != 0 {
-		headBlock := &inca.Block{}
-		{
-			encConf := c.GetEncryptionStrategy().GetBlockEncryptionConfigWithDigest(segmentState.GetHeadBlock().GetObjectDigest())
-			ctx := pbobject.WithEncryptionConf(ctx, &encConf)
-			if err := segmentState.GetHeadBlock().FollowRef(ctx, nil, headBlock); err != nil {
-				return err
-			}
+		headBlock, err := block.FollowBlockRef(ctx, segmentState.GetHeadBlock(), c.encStrat)
+		if err != nil {
+			return err
 		}
 
-		headBlockHeader := &inca.BlockHeader{}
-		{
-			encConf := c.GetEncryptionStrategy().GetBlockEncryptionConfigWithDigest(headBlock.GetBlockHeaderRef().GetObjectDigest())
-			ctx := pbobject.WithEncryptionConf(ctx, &encConf)
-			if err := headBlock.GetBlockHeaderRef().FollowRef(ctx, nil, headBlockHeader); err != nil {
-				return err
-			}
+		headBlockHeader, err := block.FollowBlockHeaderRef(ctx, headBlock.GetBlockHeaderRef(), c.encStrat)
+		if err != nil {
+			return err
 		}
 
 		now := time.Now()
@@ -482,7 +475,6 @@ func (c *Chain) manageStateOnce(ctx context.Context) error {
 		c.lastBlockHeader = headBlockHeader
 		c.lastBlockRef = segmentState.GetHeadBlock()
 		c.lastHeadDigest = headDigest
-
 	}
 
 	if err := c.computeEmitSnapshot(ctx); err != nil {

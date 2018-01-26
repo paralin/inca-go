@@ -156,11 +156,6 @@ func (n *Node) SendMessage(ctx context.Context, msgType inca.NodeMessageType, ms
 	}
 }
 
-// HandleBlockCommit handles an incoming block commit.
-func (n *Node) HandleBlockCommit(p *peer.Peer, blockRef *storageref.StorageRef, block *inca.Block) {
-	//
-}
-
 // pubsubSendMsg actually emits a node message to the pubsub channel.
 func (n *Node) pubsubSendMsg(msg *inca.NodeMessage) error {
 	tsNow := timestamp.Now()
@@ -268,4 +263,9 @@ func (n *Node) processNode(proc goprocess.Process) {
 			}
 		}
 	}
+}
+
+// HandleBlockCommit handles an incoming block commit.
+func (n *Node) HandleBlockCommit(p *peer.Peer, blkRef *storageref.StorageRef, blk *inca.Block) {
+	//
 }

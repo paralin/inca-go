@@ -1,0 +1,12 @@
+syntax = "proto3";
+package block;
+
+import "github.com/aperturerobotics/storageref/storageref.proto";
+
+// State contains state for a block.
+message State {
+  // NextBlock is the known next block in the sequence.
+  storageref.StorageRef next_block = 1;
+  // SegmentId is the ID of the block segment.
+  string segment_id = 2;
+}

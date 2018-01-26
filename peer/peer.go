@@ -9,6 +9,7 @@ import (
 
 	"github.com/Sirupsen/logrus"
 	"github.com/aperturerobotics/inca"
+	"github.com/aperturerobotics/inca-go/block"
 	dbm "github.com/aperturerobotics/inca-go/db"
 	"github.com/aperturerobotics/inca-go/encryption"
 	"github.com/aperturerobotics/objstore"
@@ -159,15 +160,12 @@ func (p *Peer) processIncomingNodeMessage(nm *inca.NodeMessage) error {
 	}
 
 	if nm.GetMessageType() == inca.NodeMessageType_NodeMessageType_BLOCK_COMMIT {
-		block := &inca.Block{}
-		blockRef := nm.GetInnerRef()
-		encConf := p.encStrat.GetBlockEncryptionConfigWithDigest(blockRef.GetObjectDigest())
-		subCtx := pbobject.WithEncryptionConf(p.ctx, &encConf)
-		if err := blockRef.FollowRef(subCtx, blockRef.GetObjectDigest(), block); err != nil {
+		blk, err := block.FollowBlockRef(p.ctx, nm.GetInnerRef(), p.encStrat)
+		if err != nil {
 			return err
 		}
 
-		go p.handler.HandleBlockCommit(p, blockRef, block)
+		go p.handler.HandleBlockCommit(p, nm.GetInnerRef(), blk)
 	}
 
 	p.emitNextNodeMessage(nm)

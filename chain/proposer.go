@@ -5,11 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/Sirupsen/logrus"
 	"github.com/aperturerobotics/inca"
+	"github.com/aperturerobotics/inca-go/block"
 	"github.com/aperturerobotics/inca-go/db"
 	"github.com/aperturerobotics/inca-go/logctx"
 	"github.com/aperturerobotics/inca-go/peer"
@@ -33,9 +33,8 @@ type Proposer struct {
 	pubKeyBytes []byte
 	objStore    *objstore.ObjectStore
 
-	proposeMtx sync.Mutex
-	msgSender  NodeMessageSender
-	peerStore  *peer.PeerStore
+	msgSender NodeMessageSender
+	peerStore *peer.PeerStore
 }
 
 // NewProposer builds a new Proposer.
@@ -209,7 +208,7 @@ StateLoop:
 		}
 
 		// Wait for the proposal to be signed by enough voting power.
-		requiredVotingPower := int32(float32(nextState.TotalVotingPower) * BlockCommitRatio)
+		requiredVotingPower := int32(float32(nextState.TotalVotingPower) * block.BlockCommitRatio)
 		p.le.
 			WithField("total-voting-power", nextState.TotalVotingPower).
 			WithField("required-voting-power", requiredVotingPower).
