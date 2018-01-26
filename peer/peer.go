@@ -48,7 +48,7 @@ type Peer struct {
 // PeerHandler handles peer events.
 type PeerHandler interface {
 	// HandleBlockCommit handles an incoming block.
-	HandleBlockCommit(p *Peer, blockRef *storageref.StorageRef, block *inca.Block)
+	HandleBlockCommit(p *Peer, blockRef *storageref.StorageRef, block *inca.Block) error
 }
 
 // NewPeer builds a new peer object.
@@ -165,7 +165,10 @@ func (p *Peer) processIncomingNodeMessage(nm *inca.NodeMessage) error {
 			return err
 		}
 
-		go p.handler.HandleBlockCommit(p, nm.GetInnerRef(), blk)
+		err = p.handler.HandleBlockCommit(p, nm.GetInnerRef(), blk)
+		if err != nil {
+			le.WithError(err).Warn("block commit handler failed")
+		}
 	}
 
 	p.emitNextNodeMessage(nm)

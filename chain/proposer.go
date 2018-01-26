@@ -30,6 +30,7 @@ type Proposer struct {
 	le          *logrus.Entry
 	dbm         db.Db
 	privKey     crypto.PrivKey
+	validatorId lpeer.ID
 	pubKeyBytes []byte
 	objStore    *objstore.ObjectStore
 
@@ -56,6 +57,10 @@ func NewProposer(ctx context.Context, privKey crypto.PrivKey, dbm db.Db, ch *Cha
 		peerStore: peerStore,
 	}
 	p.pubKeyBytes, err = privKey.GetPublic().Bytes()
+	if err != nil {
+		return nil, err
+	}
+	p.validatorId, err = lpeer.IDFromPrivateKey(privKey)
 	if err != nil {
 		return nil, err
 	}
@@ -101,16 +106,19 @@ func (p *Proposer) writeState(ctx context.Context) error {
 }
 
 // makeProposal makes a proposal for the given state.
-func (p *Proposer) makeProposal(ctx context.Context, state *ChainStateSnapshot) (*storageref.StorageRef, error) {
+func (p *Proposer) makeProposal(ctx context.Context, state *ChainStateSnapshot) (*storageref.StorageRef, *inca.BlockHeader, error) {
 	nowTs := timestamp.Now()
 	blockHeader := &inca.BlockHeader{
-		GenesisRef:     p.ch.GetGenesisRef(),
-		ChainConfigRef: state.LastBlockHeader.GetChainConfigRef(),
-		// TODO: introduce proposals here
+		GenesisRef:         p.ch.GetGenesisRef(),
+		ChainConfigRef:     state.LastBlockHeader.GetChainConfigRef(),
 		NextChainConfigRef: state.LastBlockHeader.GetChainConfigRef(),
 		LastBlockRef:       state.LastBlockRef,
-		RoundInfo:          state.BlockRoundInfo,
-		BlockTs:            &nowTs,
+		RoundInfo: &inca.BlockRoundInfo{
+			Height: state.BlockRoundInfo.GetHeight(),
+			Round:  state.BlockRoundInfo.GetRound(),
+		},
+		BlockTs:    &nowTs,
+		ProposerId: p.validatorId.Pretty(),
 	}
 
 	var blockHeaderRef *storageref.StorageRef
@@ -119,7 +127,7 @@ func (p *Proposer) makeProposal(ctx context.Context, state *ChainStateSnapshot) 
 		subCtx := pbobject.WithEncryptionConf(ctx, &encConf)
 		sr, _, err := p.objStore.StoreObject(subCtx, blockHeader, encConf)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		blockHeaderRef = sr
 	}
@@ -131,16 +139,16 @@ func (p *Proposer) makeProposal(ctx context.Context, state *ChainStateSnapshot) 
 		subCtx := pbobject.WithEncryptionConf(ctx, &encConf)
 		sr, _, err := p.objStore.StoreObject(subCtx, vote, encConf)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		voteStorageRef = sr
 	}
 
 	err := p.msgSender.SendMessage(p.ctx, inca.NodeMessageType_NodeMessageType_VOTE, voteStorageRef)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return blockHeaderRef, nil
+	return blockHeaderRef, blockHeader, nil
 }
 
 type confirmedVote struct {
@@ -181,8 +189,6 @@ StateLoop:
 			continue
 		}
 
-		p.le.WithField("round-height", nextState.BlockRoundInfo.String()).Info("we propose this round")
-
 		lastHeight := p.state.GetLastProposal().GetHeight()
 		currHeight := nextState.BlockRoundInfo.GetHeight()
 		if p.state.GetLastProposal() != nil && lastHeight > currHeight {
@@ -191,7 +197,7 @@ StateLoop:
 
 		lastRound := p.state.GetLastProposal().GetRound()
 		currRound := nextState.BlockRoundInfo.GetRound()
-		if p.state.GetLastProposal() != nil && lastRound >= currRound {
+		if p.state.GetLastProposal() != nil && lastHeight == currHeight && lastRound >= currRound {
 			continue
 		}
 
@@ -201,8 +207,10 @@ StateLoop:
 			continue
 		}
 
+		p.le.WithField("round-height", nextState.BlockRoundInfo.String()).Info("proposing this round")
+
 		// make the proposal
-		blockHeaderRef, err := p.makeProposal(stateCtx, &nextState)
+		blockHeaderRef, blockHeader, err := p.makeProposal(stateCtx, &nextState)
 		if err != nil {
 			p.le.WithError(err).Error("unable to make proposal")
 		}
@@ -210,8 +218,10 @@ StateLoop:
 		// Wait for the proposal to be signed by enough voting power.
 		requiredVotingPower := int32(float32(nextState.TotalVotingPower) * block.BlockCommitRatio)
 		p.le.
+			WithField("height-round", nextState.BlockRoundInfo.String()).
 			WithField("total-voting-power", nextState.TotalVotingPower).
 			WithField("required-voting-power", requiredVotingPower).
+			WithField("proposal", blockHeader.String()).
 			Info("waiting for votes")
 
 		votingPowerAccum := make(chan *confirmedVote)

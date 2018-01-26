@@ -5,8 +5,8 @@ import "github.com/aperturerobotics/storageref/storageref.proto";
 
 // ChainState manages the chain state in the database.
 message ChainState {
-  // StateSegmentRef is the current active segment used for state.
-  storageref.StorageRef state_segment_ref = 1;
+  // StateSegment is the current active segment used for state.
+  string state_segment = 1;
   // LastHeight is the last processed height.
   uint64 last_height = 2;
   // LastRound is the last processed round.

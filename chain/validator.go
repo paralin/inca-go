@@ -175,6 +175,8 @@ func (p *Validator) makeVote(ctx context.Context, state *ChainStateSnapshot) (*s
 			return nil, err
 		}
 	}
+
+	p.le.WithField("height-round", state.BlockRoundInfo.String()).Info("voted for height/round")
 	return voteStorageRef, nil
 }
 

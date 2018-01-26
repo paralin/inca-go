@@ -33,6 +33,7 @@ type Node struct {
 	objStore  *objstore.ObjectStore
 	shell     *api.Shell
 	proposer  *chain.Proposer
+	validator *chain.Validator
 	chain     *chain.Chain
 	proc      goprocess.Process
 	initCh    chan chan error
@@ -84,10 +85,15 @@ func NewNode(
 		objStore,
 		genesisRef.GetObjectDigest(),
 		ch.GetEncryptionStrategy(),
-		n,
+		n.chain,
 	)
 
 	n.proposer, err = chain.NewProposer(ctx, privKey, dbm, ch, n, n.peerStore)
+	if err != nil {
+		return nil, err
+	}
+
+	n.validator, err = chain.NewValidator(ctx, privKey, dbm, ch, n, n.peerStore)
 	if err != nil {
 		return nil, err
 	}
@@ -245,6 +251,9 @@ func (n *Node) processNode(proc goprocess.Process) {
 		errCh <- n.proposer.ManageProposer(ctx)
 	}()
 	go func() {
+		errCh <- n.validator.ManageValidator(ctx)
+	}()
+	go func() {
 		errCh <- n.processPubSub()
 	}()
 
@@ -263,9 +272,4 @@ func (n *Node) processNode(proc goprocess.Process) {
 			}
 		}
 	}
-}
-
-// HandleBlockCommit handles an incoming block commit.
-func (n *Node) HandleBlockCommit(p *peer.Peer, blkRef *storageref.StorageRef, blk *inca.Block) {
-	//
 }

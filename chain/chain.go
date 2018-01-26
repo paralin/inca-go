@@ -3,7 +3,6 @@ package chain
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"encoding/base64"
 	"fmt"
 	"sync"
@@ -17,16 +16,19 @@ import (
 	"github.com/aperturerobotics/inca-go/encryption/convergentimmutable"
 	"github.com/aperturerobotics/inca-go/encryption/impl"
 	"github.com/aperturerobotics/inca-go/logctx"
+	"github.com/aperturerobotics/inca-go/peer"
 	"github.com/aperturerobotics/objstore"
 	"github.com/aperturerobotics/pbobject"
 	"github.com/aperturerobotics/storageref"
-	srdigest "github.com/aperturerobotics/storageref/digest"
-	_ "github.com/aperturerobotics/storageref/ipfs"
 	"github.com/aperturerobotics/timestamp"
 	"github.com/golang/protobuf/proto"
 	"github.com/libp2p/go-libp2p-crypto"
+	lpeer "github.com/libp2p/go-libp2p-peer"
 	"github.com/pkg/errors"
 	"github.com/satori/go.uuid"
+
+	// _ enables the IPFS storage ref type
+	_ "github.com/aperturerobotics/storageref/ipfs"
 )
 
 var genesisKey = "/genesis"
@@ -113,7 +115,7 @@ func NewChain(
 		le:                  le,
 		recheckStateTrigger: make(chan struct{}, 1),
 	}
-	ch.SegmentStore = NewSegmentStore(ctx, ch, idb.WithPrefix(dbm, []byte(fmt.Sprintf("/chain/%s/segments", ch.genesis.GetChainId()))))
+	ch.SegmentStore = NewSegmentStore(ctx, ch, idb.WithPrefix(dbm, []byte(fmt.Sprintf("/chain/%s/segments", ch.genesis.GetChainId()))), db)
 	conf.EncryptionArgs = argsObjectWrapper
 	ch.encStrat = strat
 	ch.computePubsubTopic()
@@ -124,19 +126,16 @@ func NewChain(
 		return nil, err
 	}
 
-	_, randPub, _ := crypto.GenerateEd25519Key(rand.Reader)
-	randPubBytes, _ := randPub.Bytes()
+	validatorId, err := lpeer.IDFromPublicKey(validatorPub)
+	if err != nil {
+		return nil, err
+	}
 
 	validatorSet := &inca.ValidatorSet{
 		Validators: []*inca.Validator{
 			&inca.Validator{
 				PubKey:        validatorPubBytes,
 				VotingPower:   10,
-				OperationMode: inca.Validator_OperationMode_OPERATING,
-			},
-			&inca.Validator{
-				PubKey:        randPubBytes,
-				VotingPower:   3,
 				OperationMode: inca.Validator_OperationMode_OPERATING,
 			},
 		},
@@ -179,7 +178,8 @@ func NewChain(
 			Height: 0,
 			Round:  0,
 		},
-		BlockTs: &nowTs,
+		BlockTs:    &nowTs,
+		ProposerId: validatorId.Pretty(),
 	}
 	firstBlockHeaderStorageRef, _, err := db.StoreObject(
 		ctx,
@@ -230,8 +230,21 @@ func NewChain(
 		return nil, err
 	}
 
+	firstBlk, err := block.GetBlock(ctx, ch.encStrat, ch.GetBlockDbm(), firstBlockStorageRef)
+	if err != nil {
+		return nil, err
+	}
+	seg, err := ch.SegmentStore.NewSegment(ctx, firstBlk, firstBlockStorageRef)
+	if err != nil {
+		return nil, err
+	}
+	firstBlk.State.SegmentId = seg.state.Id
+	if err := firstBlk.WriteState(ctx); err != nil {
+		return nil, err
+	}
+
 	ch.state = ChainState{
-		StateSegmentRef: srdigest.NewStorageRefDigest(firstSegDigest),
+		StateSegment: seg.state.Id,
 	}
 	if err := ch.writeState(ctx); err != nil {
 		return nil, err
@@ -279,7 +292,7 @@ func FromConfig(
 		le:                  le,
 		recheckStateTrigger: make(chan struct{}, 1),
 	}
-	ch.SegmentStore = NewSegmentStore(ctx, ch, idb.WithPrefix(dbm, []byte(fmt.Sprintf("/chain/%s/segments", ch.genesis.GetChainId()))))
+	ch.SegmentStore = NewSegmentStore(ctx, ch, idb.WithPrefix(dbm, []byte(fmt.Sprintf("/chain/%s/segments", ch.genesis.GetChainId()))), db)
 	ch.computePubsubTopic()
 
 	if err := ch.readState(ctx); err != nil {
@@ -327,6 +340,62 @@ func (c *Chain) ValidateGenesisRef(ref *storageref.StorageRef) error {
 // GetObjectTypeID returns the object type string, used to identify types.
 func (g *ChainState) GetObjectTypeID() *pbobject.ObjectTypeID {
 	return pbobject.NewObjectTypeID("/inca/chain-state")
+}
+
+// GetBlockDbm returns the db used for blocks.
+func (c *Chain) GetBlockDbm() idb.Db {
+	return idb.WithPrefix(c.dbm, []byte("/blocks"))
+}
+
+// HandleBlockCommit handles an incoming block commit.
+func (c *Chain) HandleBlockCommit(p *peer.Peer, blkRef *storageref.StorageRef, blk *inca.Block) error {
+	ctx := c.ctx
+	encStrat := c.GetEncryptionStrategy()
+	blkDbm := c.GetBlockDbm()
+	blkObj, err := block.GetBlock(ctx, encStrat, blkDbm, blkRef)
+	if err != nil {
+		return err
+	}
+
+	// blkHeader := blkObj.GetHeader()
+	blkSegID := blkObj.GetSegmentId()
+	if blkSegID != "" {
+		return nil
+	}
+
+	// Identify the parent of the block.
+	// blkParentRef := blkHeader.GetLastBlockRef()
+	blkHeader := blkObj.GetHeader()
+	blkParentObj, err := block.GetBlock(ctx, encStrat, blkDbm, blkHeader.GetLastBlockRef())
+	if err != nil {
+		return err
+	}
+
+	// If the parent is identified...
+	blkParentSegmentID := blkParentObj.GetSegmentId()
+	if blkParentSegmentID != "" {
+		blkParentSeg, err := c.GetSegmentById(ctx, blkParentSegmentID)
+		if err != nil {
+			return err
+		}
+
+		if err := blkParentSeg.AppendBlock(ctx, blkRef, blkObj, blkParentObj); err != nil {
+			return err
+		}
+
+		c.triggerStateRecheck()
+		return nil
+	}
+
+	// Create a new segment
+	seg, err := c.NewSegment(ctx, blkObj, blkRef)
+	if err != nil {
+		return err
+	}
+
+	// TODO: schedule segment for rewind
+	c.le.WithField("segment", seg.GetId()).Info("segment needs to be rewound")
+	return nil
 }
 
 // dbKey returns the database key of this chain's state.
@@ -386,8 +455,8 @@ func (c *Chain) manageState() {
 		state := c.lastStateSnapshot
 		c.le.Debugf("state set: %v", state != nil)
 		if state != nil {
-			proposerId, _, _ := state.CurrentProposer.ParsePeerID()
-			c.le.Debugf("%s proposer: %s", state.BlockRoundInfo.String(), proposerId.Pretty())
+			proposerID, _, _ := state.CurrentProposer.ParsePeerID()
+			c.le.Debugf("%s proposer: %s", state.BlockRoundInfo.String(), proposerID.Pretty())
 			c.le.Debugf("now: %v round end: %v next round start: %v", now, state.RoundEndTime, state.NextRoundStartTime)
 			if nextCheckTime.After(state.RoundEndTime) && state.RoundEndTime.After(now) {
 				nextCheckTime = state.RoundEndTime
@@ -423,16 +492,17 @@ func (c *Chain) manageState() {
 
 func (c *Chain) manageStateOnce(ctx context.Context) error {
 	// Evaluate current state
-	stateSegment := c.state.GetStateSegmentRef()
-	if stateSegment == nil {
+	stateSegmentId := c.state.GetStateSegment()
+	if stateSegmentId == "" {
 		return errors.New("no current state segment")
 	}
 
-	segmentState := &SegmentState{}
-	if err := stateSegment.FollowRef(ctx, nil, segmentState); err != nil {
+	seg, err := c.GetSegmentById(ctx, stateSegmentId)
+	if err != nil {
 		return err
 	}
 
+	segmentState := &seg.state
 	// Check if we should fast-forward the segment.
 	if segmentState.GetSegmentNext() != nil {
 		nextSegmentState := &SegmentState{}
@@ -440,7 +510,7 @@ func (c *Chain) manageStateOnce(ctx context.Context) error {
 			return err
 		}
 
-		c.state.StateSegmentRef = segmentState.GetSegmentNext()
+		c.state.StateSegment = segmentState.GetId()
 		if err := c.writeState(ctx); err != nil {
 			return err
 		}
@@ -492,8 +562,8 @@ func (c *Chain) computeEmitSnapshot(ctx context.Context) error {
 
 	lastHeight := c.state.GetLastHeight()
 	lastRoundInfo := c.lastBlockHeader.GetRoundInfo()
-	if lastRoundInfo.GetHeight() > lastHeight {
-		c.state.LastHeight = lastRoundInfo.GetHeight()
+	if lastRoundInfo.GetHeight()+1 > lastHeight {
+		c.state.LastHeight = lastRoundInfo.GetHeight() + 1
 		c.state.LastRound = 0
 	}
 
@@ -537,7 +607,7 @@ func (c *Chain) computeEmitSnapshot(ctx context.Context) error {
 	nextRoundStartTime := roundEndTime.Add(roundDuration)
 	currRoundInfo := &inca.BlockRoundInfo{
 		Height: c.state.LastHeight,
-		Round:  c.state.LastRound,
+		Round:  currRound,
 	}
 
 	// Compute current proposer

@@ -5,10 +5,13 @@ import (
 	"fmt"
 
 	"github.com/Sirupsen/logrus"
+	"github.com/aperturerobotics/inca-go/block"
 	"github.com/aperturerobotics/inca-go/db"
 	"github.com/aperturerobotics/objstore"
 	"github.com/aperturerobotics/pbobject"
+	"github.com/aperturerobotics/storageref"
 	"github.com/golang/protobuf/proto"
+	"github.com/pkg/errors"
 )
 
 // Segment is an instance of a connected segment of the blockchain.
@@ -65,4 +68,49 @@ func (s *Segment) readState(ctx context.Context) error {
 // GetObjectTypeID returns the object type string, used to identify types.
 func (s *SegmentState) GetObjectTypeID() *pbobject.ObjectTypeID {
 	return &pbobject.ObjectTypeID{TypeUuid: "/inca/segment"}
+}
+
+// AppendBlock attempts to append a block to the segment.
+func (s *Segment) AppendBlock(ctx context.Context, blkRef *storageref.StorageRef, blk *block.Block, blkParent *block.Block) error {
+	encStrat := s.chain.GetEncryptionStrategy()
+	blkParentNextRef := blkParent.GetNextBlock()
+	if blkParentNextRef != nil {
+		blkParentNext, err := block.FollowBlockRef(ctx, blkParentNextRef, encStrat)
+		if err != nil {
+			return err
+		}
+
+		if !blkParentNext.BlockHeaderRef.Equals(blk.GetInnerBlock().GetBlockHeaderRef()) {
+			// TODO: resolve fork choice
+			return errors.Errorf("fork: block A: %s and B: %s", blk.GetId(), blkParent.GetId())
+		}
+
+		// block is already appended
+		return nil
+	}
+
+	if s.state.GetSegmentNext() != nil {
+		return errors.Errorf("fork: next segment already exists")
+	}
+
+	if err := blkParent.ValidateChild(ctx, blk); err != nil {
+		return err
+	}
+
+	blkParent.NextBlock = blkRef
+	if err := blkParent.WriteState(ctx); err != nil {
+		return err
+	}
+
+	blk.SegmentId = blkParent.SegmentId
+	if err := blk.WriteState(ctx); err != nil {
+		return err
+	}
+
+	s.state.HeadBlock = blkRef
+	if err := s.writeState(ctx); err != nil {
+		return err
+	}
+
+	return nil
 }

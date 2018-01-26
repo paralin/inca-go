@@ -8,8 +8,12 @@ import (
 	"sync"
 
 	"github.com/Sirupsen/logrus"
+	"github.com/aperturerobotics/inca-go/block"
 	"github.com/aperturerobotics/inca-go/db"
 	"github.com/aperturerobotics/inca-go/logctx"
+	"github.com/aperturerobotics/objstore"
+	"github.com/aperturerobotics/storageref"
+	"github.com/satori/go.uuid"
 )
 
 // SegmentStore keeps track of Segments in memory.
@@ -20,16 +24,18 @@ type SegmentStore struct {
 	segmentMap sync.Map
 	dbm        db.Db
 	segmentDbm db.Db
+	objStore   *objstore.ObjectStore
 }
 
 // NewSegmentStore builds a new SegmentStore.
-func NewSegmentStore(ctx context.Context, ch *Chain, dbm db.Db) *SegmentStore {
+func NewSegmentStore(ctx context.Context, ch *Chain, dbm db.Db, objStore *objstore.ObjectStore) *SegmentStore {
 	le := logctx.GetLogEntry(ctx)
 	return &SegmentStore{
 		ctx:        ctx,
 		ch:         ch,
 		dbm:        dbm,
 		segmentDbm: db.WithPrefix(dbm, []byte("/segments")),
+		objStore:   objStore,
 		le:         le,
 	}
 }
@@ -57,7 +63,15 @@ func (s *SegmentStore) GetSegmentById(ctx context.Context, id string) (*Segment,
 		return segInter.(*Segment), nil
 	}
 
-	seg := &Segment{}
+	le := logctx.GetLogEntry(ctx)
+	seg := &Segment{
+		ctx:   ctx,
+		db:    s.objStore,
+		dbm:   db.WithPrefix(s.dbm, []byte("/segments")),
+		chain: s.ch,
+		le:    le,
+	}
+
 	seg.state.Id = id
 	if err := seg.readState(ctx); err != nil {
 		return nil, err
@@ -81,8 +95,26 @@ func (s *SegmentStore) GetDigestKey(hash []byte) []byte {
 	return []byte(fmt.Sprintf("/%s", hashHex))
 }
 
-// GetBlockSegment returns a segment with the block included.
-func (s *SegmentStore) GetBlockSegment(ctx context.Context, blockDigest []byte) (*Segment, error) {
-	// TODO
-	return nil, nil
+// NewSegment builds a new segment for a block.
+func (s *SegmentStore) NewSegment(ctx context.Context, blk *block.Block, blkRef *storageref.StorageRef) (*Segment, error) {
+	segmentID := uuid.NewV4().String()
+	le := logctx.GetLogEntry(ctx)
+	seg := &Segment{
+		ctx:   ctx,
+		db:    s.objStore,
+		dbm:   db.WithPrefix(s.dbm, []byte("/segments")),
+		chain: s.ch,
+		le:    le,
+	}
+
+	seg.state.Id = segmentID
+	seg.state.HeadBlock = blkRef
+	seg.state.Status = SegmentStatus_SegmentStatus_DISJOINTED
+	seg.state.TailBlock = blkRef
+	if err := seg.writeState(ctx); err != nil {
+		return nil, err
+	}
+
+	// return the singleton
+	return s.GetSegmentById(ctx, segmentID)
 }
