@@ -476,7 +476,6 @@ func (c *Chain) manageState() {
 			nextCheckDur := nextCheckTime.Sub(now)
 			nextCheckTimer.Reset(nextCheckDur)
 			nextCheckCh = nextCheckTimer.C
-			c.le.Debugf("next check in %s", nextCheckDur)
 			lastNextCheckTime = nextCheckTime
 		}
 
