@@ -21,6 +21,9 @@ const StrategyType = inca.EncryptionStrategy_EncryptionStrategy_ConvergentImmuta
 // EncType is the encryption type of this implementation.
 const EncType = objectenc.EncryptionType_EncryptionType_SECRET_BOX
 
+// CmpType is the compression type of this implementation.
+const CmpType = objectenc.CompressionType_CompressionType_SNAPPY
+
 // hack: directly call local db compliant digest
 var sampleLocalDb = &localdb.LocalDb{}
 
@@ -94,8 +97,9 @@ func (s *Strategy) GetEncryptionConfig() pbobject.EncryptionConfig {
 	}
 
 	return pbobject.EncryptionConfig{
-		EncryptionType: EncType,
-		ResourceLookup: resolver,
+		EncryptionType:  EncType,
+		ResourceLookup:  resolver,
+		CompressionType: CmpType,
 	}
 }
 
@@ -112,8 +116,9 @@ func (s *Strategy) GetEncryptionConfigWithDigest(digest []byte) pbobject.Encrypt
 	}
 
 	return pbobject.EncryptionConfig{
-		EncryptionType: EncType,
-		ResourceLookup: resolver,
+		EncryptionType:  EncType,
+		ResourceLookup:  resolver,
+		CompressionType: CmpType,
 	}
 }
 

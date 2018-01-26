@@ -5,10 +5,15 @@ import (
 	"os"
 
 	"github.com/Sirupsen/logrus"
-	_ "github.com/aperturerobotics/inca-go/encryption/all"
 	"github.com/aperturerobotics/inca-go/logctx"
-	_ "github.com/aperturerobotics/storageref/all"
 	"github.com/urfave/cli"
+
+	// _ imports all encryption types
+	_ "github.com/aperturerobotics/objectenc/all"
+	// _ imports all storage reference types
+	_ "github.com/aperturerobotics/storageref/all"
+	// _ imports all encryption strategies
+	_ "github.com/aperturerobotics/inca-go/encryption/all"
 )
 
 var rootContext context.Context
