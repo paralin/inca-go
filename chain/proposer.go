@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/Sirupsen/logrus"
 	"github.com/aperturerobotics/inca"
@@ -180,12 +179,11 @@ StateLoop:
 			continue
 		}
 
-		if bytes.Compare(nextState.CurrentProposer.GetPubKey(), p.pubKeyBytes) != 0 {
+		if !nextState.RoundStarted {
 			continue
 		}
 
-		now := time.Now()
-		if nextState.RoundStartTime.After(now) {
+		if bytes.Compare(nextState.CurrentProposer.GetPubKey(), p.pubKeyBytes) != 0 {
 			continue
 		}
 
@@ -210,7 +208,7 @@ StateLoop:
 		p.le.WithField("round-height", nextState.BlockRoundInfo.String()).Info("proposing this round")
 
 		// make the proposal
-		blockHeaderRef, blockHeader, err := p.makeProposal(stateCtx, &nextState)
+		blockHeaderRef, _, err := p.makeProposal(stateCtx, &nextState)
 		if err != nil {
 			p.le.WithError(err).Error("unable to make proposal")
 		}
@@ -221,7 +219,6 @@ StateLoop:
 			WithField("height-round", nextState.BlockRoundInfo.String()).
 			WithField("total-voting-power", nextState.TotalVotingPower).
 			WithField("required-voting-power", requiredVotingPower).
-			WithField("proposal", blockHeader.String()).
 			Info("waiting for votes")
 
 		votingPowerAccum := make(chan *confirmedVote)

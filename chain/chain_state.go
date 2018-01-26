@@ -2,7 +2,6 @@ package chain
 
 import (
 	"context"
-	"encoding/json"
 	"math/rand"
 	"time"
 
@@ -14,6 +13,8 @@ import (
 type ChainStateSnapshot struct {
 	// Context will be canceled when the state is invalidated.
 	Context context.Context `json:"-"`
+	// RoundStarted indicates if the round is in progress.
+	RoundStarted bool
 	// BlockRoundInfo is the current block height and round information.
 	BlockRoundInfo *inca.BlockRoundInfo
 	// LastBlockHeader is the last block header.
@@ -83,10 +84,4 @@ func (c *Chain) emitNextChainState(snap *ChainStateSnapshot) {
 		}
 		return true
 	})
-
-	// quick hacky log
-	{
-		dat, _ := json.Marshal(snap)
-		c.le.Debugf("chain state: %s\n", string(dat))
-	}
 }

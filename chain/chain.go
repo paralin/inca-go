@@ -453,16 +453,15 @@ func (c *Chain) manageState() {
 		}
 
 		state := c.lastStateSnapshot
-		c.le.Debugf("state set: %v", state != nil)
 		if state != nil {
-			proposerID, _, _ := state.CurrentProposer.ParsePeerID()
-			c.le.Debugf("%s proposer: %s", state.BlockRoundInfo.String(), proposerID.Pretty())
-			c.le.Debugf("now: %v round end: %v next round start: %v", now, state.RoundEndTime, state.NextRoundStartTime)
 			if nextCheckTime.After(state.RoundEndTime) && state.RoundEndTime.After(now) {
 				nextCheckTime = state.RoundEndTime
 			}
-			if nextCheckTime.After(state.NextRoundStartTime) {
+			if nextCheckTime.After(state.NextRoundStartTime) && state.NextRoundStartTime.After(now) {
 				nextCheckTime = state.NextRoundStartTime
+			}
+			if nextCheckTime.After(state.RoundStartTime) && state.RoundStartTime.After(now) {
+				nextCheckTime = state.RoundStartTime
 			}
 		}
 
@@ -637,6 +636,7 @@ func (c *Chain) computeEmitSnapshot(ctx context.Context) error {
 		TotalVotingPower:   powerSum,
 		ChainConfig:        chainConfig,
 		ValidatorSet:       validatorSet,
+		RoundStarted:       roundStartTime.Before(time.Now()),
 	}
 	lastSnap := c.lastStateSnapshot
 	if lastSnap != nil {
@@ -644,6 +644,8 @@ func (c *Chain) computeEmitSnapshot(ctx context.Context) error {
 		case lastSnap.BlockRoundInfo.Round != currRoundInfo.Round:
 		case lastSnap.BlockRoundInfo.Height != currRoundInfo.Height:
 		case !lastSnap.RoundEndTime.Equal(roundEndTime):
+		case !lastSnap.RoundStartTime.Equal(roundStartTime):
+		case currentSnap.RoundStarted != lastSnap.RoundStarted:
 		case lastSnap.CurrentProposer == nil || bytes.Compare(lastSnap.CurrentProposer.PubKey, proposer.GetPubKey()) != 0:
 		default:
 			return nil
