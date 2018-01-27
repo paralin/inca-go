@@ -504,7 +504,7 @@ func (c *Chain) manageStateOnce(ctx context.Context) error {
 
 	segmentState := &seg.state
 	// Check if we should fast-forward the segment.
-	if segmentState.GetSegmentNext() != "" {
+	for segmentState.GetSegmentNext() != "" {
 		nextSegment, err := c.GetSegmentById(ctx, segmentState.GetSegmentNext())
 		if err != nil {
 			return err
@@ -546,6 +546,10 @@ func (c *Chain) manageStateOnce(ctx context.Context) error {
 		c.lastBlockHeader = headBlockHeader
 		c.lastBlockRef = segmentState.GetHeadBlock()
 		c.lastHeadDigest = headDigest
+
+		if err := c.writeState(ctx); err != nil {
+			return err
+		}
 	}
 
 	if err := c.computeEmitSnapshot(ctx); err != nil {
