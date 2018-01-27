@@ -16,3 +16,10 @@ This repository contains an implementation of the `inca` binary. It:
  - Can be used as a non-voting node to backup the blockchain in the local IPFS node
  
 Building a blockchain participant requires embedding Inca in your own code.
+
+## IPFS Notes
+
+Currently there are the following known quirks:
+
+ - Run ipfs with `--enable-pubsub-experiment`
+ - Run ipfs with `--routing=dhtclient` or the CPU usage will be quite high (this disables DHT)
