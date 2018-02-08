@@ -92,7 +92,7 @@ func NewChain(
 		return nil, err
 	}
 
-	validatorId, err := lpeer.IDFromPublicKey(validatorPub)
+	validatorID, err := lpeer.IDFromPublicKey(validatorPub)
 	if err != nil {
 		return nil, err
 	}
@@ -181,7 +181,7 @@ func NewChain(
 			Round:  0,
 		},
 		BlockTs:    &nowTs,
-		ProposerId: validatorId.Pretty(),
+		ProposerId: validatorID.Pretty(),
 	}
 	firstBlockHeaderStorageRef, _, err := db.StoreObject(
 		ctx,
