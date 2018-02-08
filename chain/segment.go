@@ -7,8 +7,8 @@ import (
 	"github.com/Sirupsen/logrus"
 	"github.com/aperturerobotics/inca-go/block"
 	"github.com/aperturerobotics/inca-go/db"
+	ichain "github.com/aperturerobotics/inca/chain"
 	"github.com/aperturerobotics/objstore"
-	"github.com/aperturerobotics/pbobject"
 	"github.com/aperturerobotics/storageref"
 	"github.com/golang/protobuf/proto"
 	"github.com/pkg/errors"
@@ -16,7 +16,7 @@ import (
 
 // Segment is an instance of a connected segment of the blockchain.
 type Segment struct {
-	state SegmentState
+	state ichain.SegmentState
 	ctx   context.Context       // Ctx is canceled when the segment is removed from memory
 	db    *objstore.ObjectStore // Db is the object store
 	dbm   db.Db                 // Dbm is the local key/value store
@@ -30,7 +30,7 @@ func (s *Segment) GetId() string {
 }
 
 // GetStatus returns the status of the segment.
-func (s *Segment) GetStatus() SegmentStatus {
+func (s *Segment) GetStatus() ichain.SegmentStatus {
 	return s.state.GetStatus()
 }
 
@@ -63,11 +63,6 @@ func (s *Segment) readState(ctx context.Context) error {
 	}
 
 	return proto.Unmarshal(dat, &s.state)
-}
-
-// GetObjectTypeID returns the object type string, used to identify types.
-func (s *SegmentState) GetObjectTypeID() *pbobject.ObjectTypeID {
-	return &pbobject.ObjectTypeID{TypeUuid: "/inca/segment"}
 }
 
 // AppendBlock attempts to append a block to the segment.
@@ -117,7 +112,7 @@ func (s *Segment) AppendBlock(ctx context.Context, blkRef *storageref.StorageRef
 
 // RewindOnce rewinds the segment once.
 func (s *Segment) RewindOnce(ctx context.Context, segStore *SegmentStore) error {
-	if s.state.GetStatus() != SegmentStatus_SegmentStatus_DISJOINTED {
+	if s.state.GetStatus() != ichain.SegmentStatus_SegmentStatus_DISJOINTED {
 		return nil
 	}
 
@@ -174,19 +169,19 @@ func (s *Segment) RewindOnce(ctx context.Context, segStore *SegmentStore) error 
 
 	if err := prevBlk.ValidateChild(ctx, tailBlkObj); err != nil {
 		s.le.WithError(err).Warn("segment rewound to invalid block, marking as invalid")
-		s.state.Status = SegmentStatus_SegmentStatus_INVALID
+		s.state.Status = ichain.SegmentStatus_SegmentStatus_INVALID
 	}
 
-	if s.state.Status == SegmentStatus_SegmentStatus_DISJOINTED {
+	if s.state.Status == ichain.SegmentStatus_SegmentStatus_DISJOINTED {
 		prevBlkRound := prevBlk.GetHeader().GetRoundInfo()
 		// TODO: more checking here.
 		if prevBlkRound.GetHeight() == 0 {
 			if prevBlk.GetHeader().GetChainConfigRef().Equals(s.chain.GetGenesis().GetInitChainConfigRef()) {
 				s.le.Info("traversed to the genesis block, marking segment as valid")
-				s.state.Status = SegmentStatus_SegmentStatus_VALID
+				s.state.Status = ichain.SegmentStatus_SegmentStatus_VALID
 			} else {
 				s.le.Warn("segment terminates at invalid genesis")
-				s.state.Status = SegmentStatus_SegmentStatus_INVALID
+				s.state.Status = ichain.SegmentStatus_SegmentStatus_INVALID
 			}
 		}
 	}
@@ -195,7 +190,7 @@ func (s *Segment) RewindOnce(ctx context.Context, segStore *SegmentStore) error 
 		return err
 	}
 
-	if s.state.Status == SegmentStatus_SegmentStatus_VALID {
+	if s.state.Status == ichain.SegmentStatus_SegmentStatus_VALID {
 		if s.chain.state.GetStateSegment() == "" {
 			s.chain.state.StateSegment = s.state.Id
 			s.chain.triggerStateRecheck()
@@ -207,7 +202,7 @@ func (s *Segment) RewindOnce(ctx context.Context, segStore *SegmentStore) error 
 
 // AppendSegment attempts to append a segment to the Segment.
 func (s *Segment) AppendSegment(ctx context.Context, segNext *Segment) error {
-	if segNext.state.GetStatus() != SegmentStatus_SegmentStatus_DISJOINTED {
+	if segNext.state.GetStatus() != ichain.SegmentStatus_SegmentStatus_DISJOINTED {
 		return errors.Errorf("unexpected status: %v", segNext.state.GetStatus())
 	}
 
@@ -226,7 +221,7 @@ func (s *Segment) AppendSegment(ctx context.Context, segNext *Segment) error {
 	}
 
 	if err := sHeadBlk.ValidateChild(ctx, tailBlk); err != nil {
-		segNext.state.Status = SegmentStatus_SegmentStatus_INVALID
+		segNext.state.Status = ichain.SegmentStatus_SegmentStatus_INVALID
 		s.le.
 			WithError(err).
 			WithField("segment", segNext.GetId()).

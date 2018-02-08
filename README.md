@@ -19,7 +19,7 @@ Building a blockchain participant requires embedding Inca in your own code.
 
 ## IPFS Notes
 
-Currently there are the following known quirks:
+Currently there are the following known requirements:
 
  - Run ipfs with `--enable-pubsub-experiment`
  - Run ipfs with `--routing=dhtclient` or the CPU usage will be quite high (this disables DHT)

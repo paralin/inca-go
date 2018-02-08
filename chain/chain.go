@@ -17,6 +17,7 @@ import (
 	"github.com/aperturerobotics/inca-go/encryption/impl"
 	"github.com/aperturerobotics/inca-go/logctx"
 	"github.com/aperturerobotics/inca-go/peer"
+	ichain "github.com/aperturerobotics/inca/chain"
 	"github.com/aperturerobotics/objstore"
 	"github.com/aperturerobotics/pbobject"
 	"github.com/aperturerobotics/storageref"
@@ -39,11 +40,11 @@ type Chain struct {
 	ctx                 context.Context
 	db                  *objstore.ObjectStore
 	dbm                 idb.Db
-	conf                *Config
+	conf                *ichain.Config
 	genesis             *inca.Genesis
 	encStrat            encryption.Strategy
 	le                  *logrus.Entry
-	state               ChainState
+	state               ichain.ChainState
 	recheckStateTrigger chan struct{}
 	pubsubTopic         string
 
@@ -148,7 +149,7 @@ func NewChain(
 		return nil, err
 	}
 
-	conf := &Config{
+	conf := &ichain.Config{
 		GenesisRef:         genesisStorageRef,
 		EncryptionStrategy: strat.GetEncryptionStrategyType(),
 	}
@@ -221,9 +222,10 @@ func NewChain(
 	}
 
 	var firstSegDigest []byte
-	firstSeg := &SegmentState{
-		Id:        uuid.NewV4().String(),
-		Status:    SegmentStatus_SegmentStatus_VALID,
+	uid, _ := uuid.NewV4()
+	firstSeg := &ichain.SegmentState{
+		Id:        uid.String(),
+		Status:    ichain.SegmentStatus_SegmentStatus_VALID,
 		HeadBlock: firstBlockStorageRef,
 		TailBlock: firstBlockStorageRef,
 	}
@@ -244,7 +246,7 @@ func NewChain(
 		return nil, err
 	}
 
-	ch.state = ChainState{
+	ch.state = ichain.ChainState{
 		StateSegment: seg.state.Id,
 	}
 	if err := ch.writeState(ctx); err != nil {
@@ -261,7 +263,7 @@ func FromConfig(
 	ctx context.Context,
 	dbm idb.Db,
 	db *objstore.ObjectStore,
-	conf *Config,
+	conf *ichain.Config,
 ) (*Chain, error) {
 	le := logctx.GetLogEntry(ctx)
 	if objstore.GetObjStore(ctx) == nil {
@@ -312,8 +314,8 @@ func (c *Chain) GetPubsubTopic() string {
 }
 
 // GetConfig returns a copy of the chain config.
-func (c *Chain) GetConfig() *Config {
-	return proto.Clone(c.conf).(*Config)
+func (c *Chain) GetConfig() *ichain.Config {
+	return proto.Clone(c.conf).(*ichain.Config)
 }
 
 // GetGenesis returns a copy of the genesis.
@@ -338,11 +340,6 @@ func (c *Chain) ValidateGenesisRef(ref *storageref.StorageRef) error {
 	}
 
 	return nil
-}
-
-// GetObjectTypeID returns the object type string, used to identify types.
-func (g *ChainState) GetObjectTypeID() *pbobject.ObjectTypeID {
-	return pbobject.NewObjectTypeID("/inca/chain-state")
 }
 
 // GetBlockDbm returns the db used for blocks.

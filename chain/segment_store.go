@@ -11,6 +11,7 @@ import (
 	"github.com/aperturerobotics/inca-go/block"
 	"github.com/aperturerobotics/inca-go/db"
 	"github.com/aperturerobotics/inca-go/logctx"
+	ichain "github.com/aperturerobotics/inca/chain"
 	"github.com/aperturerobotics/objstore"
 	"github.com/aperturerobotics/storageref"
 	"github.com/satori/go.uuid"
@@ -64,7 +65,7 @@ func (s *SegmentStore) manageSegmentStore(ctx context.Context) {
 			continue
 		}
 
-		if nextSeg.state.GetStatus() == SegmentStatus_SegmentStatus_DISJOINTED {
+		if nextSeg.state.GetStatus() == ichain.SegmentStatus_SegmentStatus_DISJOINTED {
 			s.segmentQueue.Push(nextSeg)
 		}
 	}
@@ -127,7 +128,8 @@ func (s *SegmentStore) GetDigestKey(hash []byte) []byte {
 
 // NewSegment builds a new segment for a block.
 func (s *SegmentStore) NewSegment(ctx context.Context, blk *block.Block, blkRef *storageref.StorageRef) (*Segment, error) {
-	segmentID := uuid.NewV4().String()
+	uid, _ := uuid.NewV4()
+	segmentID := uid.String()
 	le := logctx.GetLogEntry(ctx)
 	seg := &Segment{
 		ctx:   ctx,
@@ -139,7 +141,7 @@ func (s *SegmentStore) NewSegment(ctx context.Context, blk *block.Block, blkRef 
 
 	seg.state.Id = segmentID
 	seg.state.HeadBlock = blkRef
-	seg.state.Status = SegmentStatus_SegmentStatus_DISJOINTED
+	seg.state.Status = ichain.SegmentStatus_SegmentStatus_DISJOINTED
 	seg.state.TailBlock = blkRef
 	seg.state.TailBlockRound = blk.GetHeader().GetRoundInfo()
 	if err := seg.writeState(ctx); err != nil {

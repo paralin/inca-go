@@ -9,6 +9,7 @@ import (
 	"github.com/aperturerobotics/inca-go/chain"
 	"github.com/aperturerobotics/inca-go/logctx"
 	"github.com/aperturerobotics/inca-go/node"
+	ichain "github.com/aperturerobotics/inca/chain"
 	"github.com/aperturerobotics/objstore"
 	"github.com/golang/protobuf/jsonpb"
 	"github.com/libp2p/go-libp2p-crypto"
@@ -53,7 +54,7 @@ func GetNode() (*node.Node, error) {
 		return nil, err
 	}
 
-	chainConf := &chain.Config{}
+	chainConf := &ichain.Config{}
 	if err := jsonpb.UnmarshalString(string(dat), chainConf); err != nil {
 		return nil, err
 	}

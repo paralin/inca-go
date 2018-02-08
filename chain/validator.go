@@ -12,6 +12,7 @@ import (
 	"github.com/aperturerobotics/inca-go/db"
 	"github.com/aperturerobotics/inca-go/logctx"
 	"github.com/aperturerobotics/inca-go/peer"
+	ichain "github.com/aperturerobotics/inca/chain"
 	"github.com/aperturerobotics/objstore"
 	"github.com/aperturerobotics/pbobject"
 	"github.com/aperturerobotics/storageref"
@@ -24,7 +25,7 @@ import (
 type Validator struct {
 	ctx context.Context
 
-	state       ValidatorState
+	state       ichain.ValidatorState
 	ch          *Chain
 	le          *logrus.Entry
 	dbm         db.Db

@@ -1,9 +1,0 @@
-syntax = "proto3";
-package chain;
-
-import "github.com/aperturerobotics/inca/inca.proto";
-
-// ProposerState is state for a proposer.
-message ProposerState {
-  inca.BlockRoundInfo last_proposal = 1;
-}
