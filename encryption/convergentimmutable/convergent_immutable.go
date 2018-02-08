@@ -7,6 +7,7 @@ import (
 	"github.com/aperturerobotics/inca"
 	"github.com/aperturerobotics/inca-go/encryption"
 	"github.com/aperturerobotics/inca-go/encryption/impl"
+	ici "github.com/aperturerobotics/inca/encryption/convergentimmutable"
 	"github.com/aperturerobotics/objectenc"
 	"github.com/aperturerobotics/objectenc/secretbox"
 	"github.com/aperturerobotics/objstore/localdb"
@@ -27,17 +28,20 @@ const CmpType = objectenc.CompressionType_CompressionType_SNAPPY
 // hack: directly call local db compliant digest
 var sampleLocalDb = &localdb.LocalDb{}
 
-// Strategy implements the ConvergentImmutable strategy.
+// Strategy implements the convergent encryption strategy with immutable historic encryption.
+// This means that a pre-shared key will be used, along with the digest (sha256) of the object as the nonce.
+// If the key is changed in some block, the blocks following the change will be re-encrypted with the new key.
+// Immutable indicates that the state cannot be historically re-encrypted if the key is leaked.
 type Strategy struct {
 	Key  [32]byte
-	conf *Config
+	conf *ici.Config
 }
 
 // NewConvergentImmutableStrategyFromConfig builds a new convergent immutable strategy.
 func NewConvergentImmutableStrategyFromConfig(conf *pbobject.ObjectWrapper) (encryption.Strategy, error) {
 	s := &Strategy{}
 
-	sc := &Config{}
+	sc := &ici.Config{}
 	if err := conf.DecodeToObject(sc, pbobject.EncryptionConfig{}); err != nil {
 		return nil, err
 	}
@@ -58,7 +62,7 @@ func NewConvergentImmutableStrategy() (*Strategy, error) {
 	if _, err := rand.Read(strat.Key[:]); err != nil {
 		return nil, err
 	}
-	strat.conf = &Config{}
+	strat.conf = &ici.Config{}
 	strat.conf.PreSharedKey = make([]byte, 32)
 	copy(strat.conf.PreSharedKey, strat.Key[:])
 	return strat, nil
@@ -139,7 +143,7 @@ func (s *Strategy) GetNodeMessageEncryptionConfig(nodePriv crypto.PrivKey) pbobj
 	return c
 }
 
-// GetGenesisEncryptionConfigWithDigest returns the encryption configuration for the genesis block with a digest.
+// GetNodeMessageEncryptionConfigWithDigest returns the encryption configuration for the genesis block with a digest.
 func (s *Strategy) GetNodeMessageEncryptionConfigWithDigest(pubKey crypto.PubKey, digest []byte) pbobject.EncryptionConfig {
 	encConf := s.GetEncryptionConfigWithDigest(digest)
 	encConf.VerifyKeys = append(encConf.VerifyKeys, pubKey)
@@ -154,14 +158,6 @@ func (s *Strategy) GetBlockEncryptionConfig() pbobject.EncryptionConfig {
 // GetBlockEncryptionConfigWithDigest returns the block encryption configuration for the genesis block with a digest.
 func (s *Strategy) GetBlockEncryptionConfigWithDigest(digest []byte) pbobject.EncryptionConfig {
 	return s.GetEncryptionConfigWithDigest(digest)
-}
-
-// configTypeID is the type ID of the configuration.
-var configTypeID = &pbobject.ObjectTypeID{TypeUuid: "/inca/encryption/convergent-immutable/config"}
-
-// GetObjectTypeID returns the object type string, used to identify types.
-func (c *Config) GetObjectTypeID() *pbobject.ObjectTypeID {
-	return configTypeID
 }
 
 func init() {

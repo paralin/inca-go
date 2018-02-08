@@ -7,8 +7,6 @@ import (
 )
 
 // Strategy is a blockchain encryption implementation strategy.
-// TODO:
-//  - Apply mutation to state to push a new block header onto the stack
 type Strategy interface {
 	// GetEncryptionStrategyType returns the encryption strategy type.
 	GetEncryptionStrategyType() inca.EncryptionStrategy
