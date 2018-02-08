@@ -379,7 +379,13 @@ func (c *Chain) HandleBlockCommit(p *peer.Peer, blkRef *storageref.StorageRef, b
 			return err
 		}
 
-		if err := blkParentSeg.AppendBlock(ctx, blkRef, blkObj, blkParentObj); err != nil {
+		if err := blkParentSeg.AppendBlock(
+			ctx,
+			blkRef,
+			blkObj,
+			blkParentObj,
+			c.GetEncryptionStrategy(),
+		); err != nil {
 			return err
 		}
 

@@ -7,6 +7,7 @@ import (
 	"github.com/Sirupsen/logrus"
 	"github.com/aperturerobotics/inca-go/block"
 	"github.com/aperturerobotics/inca-go/db"
+	"github.com/aperturerobotics/inca-go/encryption"
 	ichain "github.com/aperturerobotics/inca/chain"
 	"github.com/aperturerobotics/objstore"
 	"github.com/aperturerobotics/storageref"
@@ -20,7 +21,6 @@ type Segment struct {
 	ctx   context.Context       // Ctx is canceled when the segment is removed from memory
 	db    *objstore.ObjectStore // Db is the object store
 	dbm   db.Db                 // Dbm is the local key/value store
-	chain *Chain                // Chain is a reference to the parent blockchain
 	le    *logrus.Entry         // le is the logger
 }
 
@@ -66,8 +66,7 @@ func (s *Segment) readState(ctx context.Context) error {
 }
 
 // AppendBlock attempts to append a block to the segment.
-func (s *Segment) AppendBlock(ctx context.Context, blkRef *storageref.StorageRef, blk *block.Block, blkParent *block.Block) error {
-	encStrat := s.chain.GetEncryptionStrategy()
+func (s *Segment) AppendBlock(ctx context.Context, blkRef *storageref.StorageRef, blk *block.Block, blkParent *block.Block, encStrat encryption.Strategy) error {
 	blkParentNextRef := blkParent.GetNextBlock()
 	if blkParentNextRef != nil {
 		blkParentNext, err := block.FollowBlockRef(ctx, blkParentNextRef, encStrat)
@@ -112,6 +111,7 @@ func (s *Segment) AppendBlock(ctx context.Context, blkRef *storageref.StorageRef
 
 // RewindOnce rewinds the segment once.
 func (s *Segment) RewindOnce(ctx context.Context, segStore *SegmentStore) error {
+	chain := segStore.ch
 	if s.state.GetStatus() != ichain.SegmentStatus_SegmentStatus_DISJOINTED {
 		return nil
 	}
@@ -122,23 +122,23 @@ func (s *Segment) RewindOnce(ctx context.Context, segStore *SegmentStore) error 
 		WithField("tail-height", s.state.GetTailBlockRound().String()).
 		Debug("rewinding once")
 	tailRef := s.state.GetTailBlock()
-	tailBlk, err := block.FollowBlockRef(ctx, tailRef, s.chain.GetEncryptionStrategy())
+	tailBlk, err := block.FollowBlockRef(ctx, tailRef, chain.GetEncryptionStrategy())
 	if err != nil {
 		return err
 	}
 
-	tailBlkObj, err := block.GetBlock(ctx, s.chain.GetEncryptionStrategy(), s.chain.GetBlockDbm(), tailRef)
+	tailBlkObj, err := block.GetBlock(ctx, chain.GetEncryptionStrategy(), chain.GetBlockDbm(), tailRef)
 	if err != nil {
 		return err
 	}
 
-	tailBlkHeader, err := block.FollowBlockHeaderRef(ctx, tailBlk.GetBlockHeaderRef(), s.chain.GetEncryptionStrategy())
+	tailBlkHeader, err := block.FollowBlockHeaderRef(ctx, tailBlk.GetBlockHeaderRef(), chain.GetEncryptionStrategy())
 	if err != nil {
 		return err
 	}
 
 	prevBlockRef := tailBlkHeader.GetLastBlockRef()
-	prevBlk, err := block.GetBlock(ctx, s.chain.GetEncryptionStrategy(), s.chain.GetBlockDbm(), prevBlockRef)
+	prevBlk, err := block.GetBlock(ctx, chain.GetEncryptionStrategy(), chain.GetBlockDbm(), prevBlockRef)
 	if err != nil {
 		return err
 	}
@@ -154,7 +154,7 @@ func (s *Segment) RewindOnce(ctx context.Context, segStore *SegmentStore) error 
 			return errors.New("previous segment resolved to this segment")
 		}
 
-		return prevSegment.AppendSegment(ctx, s)
+		return prevSegment.AppendSegment(ctx, segStore.ch, s)
 	}
 
 	// Include in this segment
@@ -176,7 +176,7 @@ func (s *Segment) RewindOnce(ctx context.Context, segStore *SegmentStore) error 
 		prevBlkRound := prevBlk.GetHeader().GetRoundInfo()
 		// TODO: more checking here.
 		if prevBlkRound.GetHeight() == 0 {
-			if prevBlk.GetHeader().GetChainConfigRef().Equals(s.chain.GetGenesis().GetInitChainConfigRef()) {
+			if prevBlk.GetHeader().GetChainConfigRef().Equals(chain.GetGenesis().GetInitChainConfigRef()) {
 				s.le.Info("traversed to the genesis block, marking segment as valid")
 				s.state.Status = ichain.SegmentStatus_SegmentStatus_VALID
 			} else {
@@ -191,9 +191,9 @@ func (s *Segment) RewindOnce(ctx context.Context, segStore *SegmentStore) error 
 	}
 
 	if s.state.Status == ichain.SegmentStatus_SegmentStatus_VALID {
-		if s.chain.state.GetStateSegment() == "" {
-			s.chain.state.StateSegment = s.state.Id
-			s.chain.triggerStateRecheck()
+		if chain.state.GetStateSegment() == "" {
+			chain.state.StateSegment = s.state.Id
+			chain.triggerStateRecheck()
 		}
 	}
 
@@ -201,21 +201,21 @@ func (s *Segment) RewindOnce(ctx context.Context, segStore *SegmentStore) error 
 }
 
 // AppendSegment attempts to append a segment to the Segment.
-func (s *Segment) AppendSegment(ctx context.Context, segNext *Segment) error {
+func (s *Segment) AppendSegment(ctx context.Context, ch *Chain, segNext *Segment) error {
 	if segNext.state.GetStatus() != ichain.SegmentStatus_SegmentStatus_DISJOINTED {
 		return errors.Errorf("unexpected status: %v", segNext.state.GetStatus())
 	}
 
-	encStrat := s.chain.GetEncryptionStrategy()
+	encStrat := ch.GetEncryptionStrategy()
 
 	tailRef := segNext.state.GetTailBlock()
-	tailBlk, err := block.GetBlock(ctx, encStrat, s.chain.GetBlockDbm(), tailRef)
+	tailBlk, err := block.GetBlock(ctx, encStrat, ch.GetBlockDbm(), tailRef)
 	if err != nil {
 		return err
 	}
 
 	sHeadRef := s.state.GetHeadBlock()
-	sHeadBlk, err := block.GetBlock(ctx, encStrat, s.chain.GetBlockDbm(), sHeadRef)
+	sHeadBlk, err := block.GetBlock(ctx, encStrat, ch.GetBlockDbm(), sHeadRef)
 	if err != nil {
 		return err
 	}

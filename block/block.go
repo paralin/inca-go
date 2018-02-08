@@ -8,6 +8,7 @@ import (
 	"github.com/aperturerobotics/inca"
 	"github.com/aperturerobotics/inca-go/db"
 	"github.com/aperturerobotics/inca-go/encryption"
+	iblock "github.com/aperturerobotics/inca/block"
 	"github.com/aperturerobotics/pbobject"
 	"github.com/aperturerobotics/storageref"
 	"github.com/golang/protobuf/proto"
@@ -19,7 +20,7 @@ const BlockCommitRatio float32 = 0.66
 
 // Block is a block header wrapped with some context.
 type Block struct {
-	State
+	iblock.State
 	dbm      db.Db
 	blk      *inca.Block
 	header   *inca.BlockHeader

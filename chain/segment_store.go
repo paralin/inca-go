@@ -96,11 +96,10 @@ func (s *SegmentStore) GetSegmentById(ctx context.Context, id string) (*Segment,
 
 	le := logctx.GetLogEntry(ctx)
 	seg := &Segment{
-		ctx:   ctx,
-		db:    s.objStore,
-		dbm:   db.WithPrefix(s.dbm, []byte("/segments")),
-		chain: s.ch,
-		le:    le,
+		ctx: ctx,
+		db:  s.objStore,
+		dbm: db.WithPrefix(s.dbm, []byte("/segments")),
+		le:  le,
 	}
 
 	seg.state.Id = id
@@ -132,11 +131,10 @@ func (s *SegmentStore) NewSegment(ctx context.Context, blk *block.Block, blkRef 
 	segmentID := uid.String()
 	le := logctx.GetLogEntry(ctx)
 	seg := &Segment{
-		ctx:   ctx,
-		db:    s.objStore,
-		dbm:   db.WithPrefix(s.dbm, []byte("/segments")),
-		chain: s.ch,
-		le:    le,
+		ctx: ctx,
+		db:  s.objStore,
+		dbm: db.WithPrefix(s.dbm, []byte("/segments")),
+		le:  le,
 	}
 
 	seg.state.Id = segmentID
