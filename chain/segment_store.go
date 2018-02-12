@@ -22,7 +22,7 @@ type SegmentStore struct {
 	ctx             context.Context
 	le              *logrus.Entry
 	ch              *Chain
-	segmentMap      sync.Map
+	segmentMap      sync.Map // map[string]*Segment (by id)
 	dbm             db.Db
 	segmentDbm      db.Db
 	objStore        *objstore.ObjectStore
@@ -31,7 +31,12 @@ type SegmentStore struct {
 }
 
 // NewSegmentStore builds a new SegmentStore.
-func NewSegmentStore(ctx context.Context, ch *Chain, dbm db.Db, objStore *objstore.ObjectStore) *SegmentStore {
+func NewSegmentStore(
+	ctx context.Context,
+	ch *Chain,
+	dbm db.Db,
+	objStore *objstore.ObjectStore,
+) *SegmentStore {
 	le := logctx.GetLogEntry(ctx)
 	segmentNotifyCh := make(chan *Segment, 5)
 	return &SegmentStore{
@@ -55,19 +60,24 @@ func (s *SegmentStore) manageSegmentStore(ctx context.Context) {
 		case <-s.segmentNotifyCh:
 		}
 
-		nextSeg := s.segmentQueue.Pop()
-		if nextSeg == nil {
-			continue
-		}
+		s.rewindOnce(ctx)
+	}
+}
 
-		if err := nextSeg.RewindOnce(ctx, s); err != nil {
-			s.le.WithError(err).Warn("issue rewinding segment")
-			continue
-		}
+// rewindOnce rewinds the highest priority segment by one.
+func (s *SegmentStore) rewindOnce(ctx context.Context) {
+	nextSeg := s.segmentQueue.Pop()
+	if nextSeg == nil {
+		return
+	}
 
-		if nextSeg.state.GetStatus() == ichain.SegmentStatus_SegmentStatus_DISJOINTED {
-			s.segmentQueue.Push(nextSeg)
-		}
+	if err := nextSeg.RewindOnce(ctx, s); err != nil {
+		s.le.WithError(err).Warn("issue rewinding segment")
+		return
+	}
+
+	if nextSeg.state.GetStatus() == ichain.SegmentStatus_SegmentStatus_DISJOINTED {
+		s.segmentQueue.Push(nextSeg)
 	}
 }
 
@@ -98,7 +108,7 @@ func (s *SegmentStore) GetSegmentById(ctx context.Context, id string) (*Segment,
 	seg := &Segment{
 		ctx: ctx,
 		db:  s.objStore,
-		dbm: db.WithPrefix(s.dbm, []byte("/segments")),
+		dbm: s.segmentDbm,
 		le:  le,
 	}
 

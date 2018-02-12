@@ -148,11 +148,16 @@ func (b *Block) ValidateChild(ctx context.Context, child *Block) error {
 	bHeader := b.header
 	childHeader := child.header
 
+	if !bHeader.GetGenesisRef().Equals(childHeader.GetGenesisRef()) {
+		return errors.New("genesis reference mismatch")
+	}
+
 	bTs := b.header.GetBlockTs().ToTime()
 	childTs := childHeader.GetBlockTs().ToTime()
 
 	bRoundInfo := bHeader.GetRoundInfo()
 	childRoundInfo := childHeader.GetRoundInfo()
+	// TODO: validate round info is not empty (maybe?)
 
 	childExpectedHeight := bRoundInfo.GetHeight() + 1
 	if childRoundInfo.GetHeight() != childExpectedHeight {

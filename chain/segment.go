@@ -15,7 +15,7 @@ import (
 	"github.com/pkg/errors"
 )
 
-// Segment is an instance of a connected segment of the blockchain.
+// Segment is an instance of a connected or disconnected segment of the blockchain.
 type Segment struct {
 	state ichain.SegmentState
 	ctx   context.Context       // Ctx is canceled when the segment is removed from memory
@@ -151,7 +151,7 @@ func (s *Segment) RewindOnce(ctx context.Context, segStore *SegmentStore) error 
 		}
 
 		if prevSegment == s {
-			return errors.New("previous segment resolved to this segment")
+			return errors.New("previous segment resolved to same segment")
 		}
 
 		return prevSegment.AppendSegment(ctx, segStore.ch, s)

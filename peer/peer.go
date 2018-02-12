@@ -12,6 +12,7 @@ import (
 	"github.com/aperturerobotics/inca-go/block"
 	dbm "github.com/aperturerobotics/inca-go/db"
 	"github.com/aperturerobotics/inca-go/encryption"
+	ipeer "github.com/aperturerobotics/inca/peer"
 	"github.com/aperturerobotics/objstore"
 	"github.com/aperturerobotics/pbobject"
 	"github.com/aperturerobotics/storageref"
@@ -34,7 +35,7 @@ type Peer struct {
 	peerPubKey crypto.PubKey
 	peerID     lpeer.ID
 
-	state         PeerState
+	state         ipeer.PeerState
 	genesisDigest []byte
 
 	// the following variables are managed by the process loop

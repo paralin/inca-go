@@ -237,10 +237,12 @@ func NewChain(
 	if err != nil {
 		return nil, err
 	}
+
 	seg, err := ch.SegmentStore.NewSegment(ctx, firstBlk, firstBlockStorageRef)
 	if err != nil {
 		return nil, err
 	}
+
 	firstBlk.State.SegmentId = seg.state.Id
 	if err := firstBlk.WriteState(ctx); err != nil {
 		return nil, err
@@ -249,6 +251,7 @@ func NewChain(
 	ch.state = ichain.ChainState{
 		StateSegment: seg.state.Id,
 	}
+
 	if err := ch.writeState(ctx); err != nil {
 		return nil, err
 	}
