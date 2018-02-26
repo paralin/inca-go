@@ -21,17 +21,22 @@ const BlockCommitRatio float32 = 0.66
 // Block is a block header wrapped with some context.
 type Block struct {
 	iblock.State
-	dbm      db.Db
-	blk      *inca.Block
-	header   *inca.BlockHeader
-	encStrat encryption.Strategy
-	blkRef   *storageref.StorageRef
-	id       string
-	dbKey    []byte
+	dbm       db.Db
+	blk       *inca.Block
+	header    *inca.BlockHeader
+	encStrat  encryption.Strategy
+	blkRef    *storageref.StorageRef
+	validator Validator
+	id        string
+	dbKey     []byte
 }
 
 // FollowBlockRef follows a reference to a Block object.
-func FollowBlockRef(ctx context.Context, ref *storageref.StorageRef, encStrat encryption.Strategy) (*inca.Block, error) {
+func FollowBlockRef(
+	ctx context.Context,
+	ref *storageref.StorageRef,
+	encStrat encryption.Strategy,
+) (*inca.Block, error) {
 	blk := &inca.Block{}
 	encConf := encStrat.GetBlockEncryptionConfigWithDigest(ref.GetObjectDigest())
 	subCtx := pbobject.WithEncryptionConf(ctx, &encConf)
@@ -56,6 +61,7 @@ func FollowBlockHeaderRef(ctx context.Context, ref *storageref.StorageRef, encSt
 func GetBlock(
 	ctx context.Context,
 	encStrat encryption.Strategy,
+	validator Validator,
 	dbm db.Db,
 	blockRef *storageref.StorageRef,
 ) (*Block, error) {
@@ -70,12 +76,13 @@ func GetBlock(
 	}
 
 	b := &Block{
-		id:       base64.StdEncoding.EncodeToString(blockRef.GetObjectDigest()),
-		dbm:      dbm,
-		blk:      blk,
-		encStrat: encStrat,
-		header:   blkHeader,
-		blkRef:   blockRef,
+		id:        base64.StdEncoding.EncodeToString(blockRef.GetObjectDigest()),
+		dbm:       dbm,
+		blk:       blk,
+		encStrat:  encStrat,
+		header:    blkHeader,
+		blkRef:    blockRef,
+		validator: validator,
 	}
 	b.dbKey = []byte(fmt.Sprintf("/%s", b.id))
 
@@ -145,6 +152,10 @@ func (b *Block) fetchChainConfig(ctx context.Context) (*inca.ChainConfig, error)
 // ValidateChild checks if a block can be the next in the sequence.
 // TODO: validate timestamps on round
 func (b *Block) ValidateChild(ctx context.Context, child *Block) error {
+	if b.validator == nil {
+		return errors.New("no application validator set, cannot validate block")
+	}
+
 	bHeader := b.header
 	childHeader := child.header
 
@@ -208,6 +219,13 @@ func (b *Block) ValidateChild(ctx context.Context, child *Block) error {
 
 	if selValidatorID.Pretty() != childValidatorID {
 		return errors.Errorf("expected validator for (%d, %d) %s != actual %s", childRoundInfo.GetHeight(), childRoundInfo.GetRound(), selValidatorID.Pretty(), childValidatorID)
+	}
+
+	// TODO: decide if this is always required.
+	if b.validator != nil {
+		if err := b.validator.ValidateBlock(child, b); err != nil {
+			return err
+		}
 	}
 
 	return nil

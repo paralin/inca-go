@@ -13,7 +13,8 @@ This repo contains the Go implementation. See [the root repo](https://github.com
 This repository contains an implementation of the `inca` binary. It:
 
  - Can be used to build genesis blocks 
- - Can be used as a non-voting node to backup the blockchain in the local IPFS node
+ - Can be used as a "light" node to backup the chain traffic in the local IPFS node
+ - Can be used as a full validator node.
  
 Building a blockchain participant requires embedding Inca in your own code.
 

@@ -57,6 +57,8 @@ type Chain struct {
 	lastBlock       *inca.Block
 	lastBlockHeader *inca.BlockHeader
 	lastBlockRef    *storageref.StorageRef
+
+	blockValidator block.Validator
 }
 
 // NewChain builds a new blockchain from scratch, minting a genesis block and committing it to IPFS.
@@ -66,6 +68,7 @@ func NewChain(
 	db *objstore.ObjectStore,
 	chainID string,
 	validatorPriv crypto.PrivKey,
+	blockValidator block.Validator,
 ) (*Chain, error) {
 	if chainID == "" {
 		return nil, errors.New("chain id must be set")
@@ -155,12 +158,14 @@ func NewChain(
 	}
 
 	ch := &Chain{
-		ctx:                 ctx,
-		conf:                conf,
-		genesis:             genesis,
-		db:                  db,
-		dbm:                 dbm,
-		le:                  le,
+		ctx:     ctx,
+		conf:    conf,
+		genesis: genesis,
+		db:      db,
+		dbm:     dbm,
+		le:      le,
+
+		blockValidator:      blockValidator,
 		recheckStateTrigger: make(chan struct{}, 1),
 	}
 	ch.SegmentStore = NewSegmentStore(ctx, ch, idb.WithPrefix(dbm, []byte(fmt.Sprintf("/chain/%s/segments", ch.genesis.GetChainId()))), db)
@@ -233,7 +238,7 @@ func NewChain(
 		return nil, err
 	}
 
-	firstBlk, err := block.GetBlock(ctx, ch.encStrat, ch.GetBlockDbm(), firstBlockStorageRef)
+	firstBlk, err := block.GetBlock(ctx, ch.encStrat, blockValidator, ch.GetBlockDbm(), firstBlockStorageRef)
 	if err != nil {
 		return nil, err
 	}
@@ -267,6 +272,7 @@ func FromConfig(
 	dbm idb.Db,
 	db *objstore.ObjectStore,
 	conf *ichain.Config,
+	blockValidator block.Validator,
 ) (*Chain, error) {
 	le := logctx.GetLogEntry(ctx)
 	if objstore.GetObjStore(ctx) == nil {
@@ -298,6 +304,7 @@ func FromConfig(
 		encStrat:            encStrat,
 		le:                  le,
 		recheckStateTrigger: make(chan struct{}, 1),
+		blockValidator:      blockValidator,
 	}
 	ch.SegmentStore = NewSegmentStore(ctx, ch, idb.WithPrefix(dbm, []byte(fmt.Sprintf("/chain/%s/segments", ch.genesis.GetChainId()))), db)
 	ch.computePubsubTopic()
@@ -331,6 +338,11 @@ func (c *Chain) GetGenesisRef() *storageref.StorageRef {
 	return proto.Clone(c.conf.GetGenesisRef()).(*storageref.StorageRef)
 }
 
+// GetBlockValidator returns the block validator.
+func (c *Chain) GetBlockValidator() block.Validator {
+	return c.blockValidator
+}
+
 // GetEncryptionStrategy returns the encryption strategy for this chain.
 func (c *Chain) GetEncryptionStrategy() encryption.Strategy {
 	return c.encStrat
@@ -351,11 +363,15 @@ func (c *Chain) GetBlockDbm() idb.Db {
 }
 
 // HandleBlockCommit handles an incoming block commit.
-func (c *Chain) HandleBlockCommit(p *peer.Peer, blkRef *storageref.StorageRef, blk *inca.Block) error {
+func (c *Chain) HandleBlockCommit(
+	p *peer.Peer,
+	blkRef *storageref.StorageRef,
+	blk *inca.Block,
+) error {
 	ctx := c.ctx
 	encStrat := c.GetEncryptionStrategy()
 	blkDbm := c.GetBlockDbm()
-	blkObj, err := block.GetBlock(ctx, encStrat, blkDbm, blkRef)
+	blkObj, err := block.GetBlock(ctx, encStrat, c.GetBlockValidator(), blkDbm, blkRef)
 	if err != nil {
 		return err
 	}
@@ -369,7 +385,13 @@ func (c *Chain) HandleBlockCommit(p *peer.Peer, blkRef *storageref.StorageRef, b
 	// Identify the parent of the block.
 	// blkParentRef := blkHeader.GetLastBlockRef()
 	blkHeader := blkObj.GetHeader()
-	blkParentObj, err := block.GetBlock(ctx, encStrat, blkDbm, blkHeader.GetLastBlockRef())
+	blkParentObj, err := block.GetBlock(
+		ctx,
+		encStrat,
+		c.GetBlockValidator(),
+		blkDbm,
+		blkHeader.GetLastBlockRef(),
+	)
 	if err != nil {
 		return err
 	}

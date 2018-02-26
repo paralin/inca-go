@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/aperturerobotics/inca-go/chain"
+	"github.com/aperturerobotics/inca-go/cmd/inca/validators"
 	"github.com/aperturerobotics/inca-go/logctx"
 	"github.com/aperturerobotics/inca-go/node"
 	ichain "github.com/aperturerobotics/inca/chain"
@@ -30,6 +31,16 @@ func GetNode() (*node.Node, error) {
 	confPath := nodeConfigPath
 	if confPath == "" {
 		confPath = "node_config.json"
+	}
+
+	var validator validators.BuiltInValidator
+	if nodeValidatorType != "" {
+		nv, err := validators.GetBuiltInValidator(nodeValidatorType)
+		if err != nil {
+			return nil, err
+		}
+
+		validator = nv
 	}
 
 	le := logctx.GetLogEntry(rootContext)
@@ -60,7 +71,7 @@ func GetNode() (*node.Node, error) {
 	}
 
 	le.Debug("loading blockchain")
-	ch, err := chain.FromConfig(ctx, dbm, db, chainConf)
+	ch, err := chain.FromConfig(ctx, dbm, db, chainConf, validator)
 	if err != nil {
 		return nil, err
 	}

@@ -127,7 +127,13 @@ func (s *Segment) RewindOnce(ctx context.Context, segStore *SegmentStore) error 
 		return err
 	}
 
-	tailBlkObj, err := block.GetBlock(ctx, chain.GetEncryptionStrategy(), chain.GetBlockDbm(), tailRef)
+	tailBlkObj, err := block.GetBlock(
+		ctx,
+		chain.GetEncryptionStrategy(),
+		chain.GetBlockValidator(),
+		chain.GetBlockDbm(),
+		tailRef,
+	)
 	if err != nil {
 		return err
 	}
@@ -138,7 +144,13 @@ func (s *Segment) RewindOnce(ctx context.Context, segStore *SegmentStore) error 
 	}
 
 	prevBlockRef := tailBlkHeader.GetLastBlockRef()
-	prevBlk, err := block.GetBlock(ctx, chain.GetEncryptionStrategy(), chain.GetBlockDbm(), prevBlockRef)
+	prevBlk, err := block.GetBlock(
+		ctx,
+		chain.GetEncryptionStrategy(),
+		chain.GetBlockValidator(),
+		chain.GetBlockDbm(),
+		prevBlockRef,
+	)
 	if err != nil {
 		return err
 	}
@@ -209,13 +221,25 @@ func (s *Segment) AppendSegment(ctx context.Context, ch *Chain, segNext *Segment
 	encStrat := ch.GetEncryptionStrategy()
 
 	tailRef := segNext.state.GetTailBlock()
-	tailBlk, err := block.GetBlock(ctx, encStrat, ch.GetBlockDbm(), tailRef)
+	tailBlk, err := block.GetBlock(
+		ctx,
+		encStrat,
+		ch.GetBlockValidator(),
+		ch.GetBlockDbm(),
+		tailRef,
+	)
 	if err != nil {
 		return err
 	}
 
 	sHeadRef := s.state.GetHeadBlock()
-	sHeadBlk, err := block.GetBlock(ctx, encStrat, ch.GetBlockDbm(), sHeadRef)
+	sHeadBlk, err := block.GetBlock(
+		ctx,
+		encStrat,
+		ch.GetBlockValidator(),
+		ch.GetBlockDbm(),
+		sHeadRef,
+	)
 	if err != nil {
 		return err
 	}
