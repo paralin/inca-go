@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Sirupsen/logrus"
+	"github.com/sirupsen/logrus"
 	"github.com/aperturerobotics/inca"
 	"github.com/aperturerobotics/inca-go/block"
 	idb "github.com/aperturerobotics/inca-go/db"
@@ -658,7 +658,11 @@ func (c *Chain) computeEmitSnapshot(ctx context.Context) error {
 	}
 
 	validatorSet.SortValidators()
-	proposer, powerSum := validatorSet.SelectProposer(c.lastHeadDigest, currRoundInfo.Height, currRoundInfo.Round)
+	proposer, powerSum := validatorSet.SelectProposer(
+		c.lastHeadDigest,
+		currRoundInfo.Height,
+		currRoundInfo.Round,
+	)
 
 	currentSnap := &ChainStateSnapshot{
 		BlockRoundInfo:     currRoundInfo,

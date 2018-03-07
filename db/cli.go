@@ -1,7 +1,7 @@
 package db
 
 import (
-	"github.com/Sirupsen/logrus"
+	"github.com/sirupsen/logrus"
 	"github.com/dgraph-io/badger"
 	"github.com/pkg/errors"
 	"github.com/urfave/cli"
