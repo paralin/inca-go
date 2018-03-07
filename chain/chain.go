@@ -567,7 +567,8 @@ func (c *Chain) manageStateOnce(ctx context.Context) error {
 		}
 		c.le.
 			WithField("head", headStr).
-			WithField("block-ipfs-ref", headBlock.GetBlockHeaderRef().GetIpfs().GetObjectHash()).
+			WithField("block-ipfs-ref", headBlock.GetBlockHeaderRef().GetIpfs().GetReference()).
+			WithField("block-ipfs-ref-type", headBlock.GetBlockHeaderRef().GetIpfs().GetIpfsRefType().String()).
 			WithField("block-time-ago", now.Sub(headBlockTs).String()).
 			Info("head block updated")
 		c.lastBlock = headBlock
@@ -674,6 +675,7 @@ func (c *Chain) computeEmitSnapshot(ctx context.Context) error {
 	}
 	lastSnap := c.lastStateSnapshot
 	if lastSnap != nil {
+		// Detect if anything changed.
 		switch {
 		case lastSnap.BlockRoundInfo.Round != currRoundInfo.Round:
 		case lastSnap.BlockRoundInfo.Height != currRoundInfo.Height:

@@ -67,7 +67,7 @@ func cmdInitCluster(p goprocess.Process) error {
 
 	conf := ch.GetConfig()
 	le.
-		WithField("genesis-object", conf.GetGenesisRef().GetIpfs().GetObjectHash()).
+		WithField("genesis-object", conf.GetGenesisRef().GetIpfs().GetReference()).
 		Info("successfully built genesis block")
 	marshaler := &jsonpb.Marshaler{Indent: "\t"}
 	dat, _ := marshaler.MarshalToString(conf)

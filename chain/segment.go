@@ -110,17 +110,20 @@ func (s *Segment) AppendBlock(ctx context.Context, blkRef *storageref.StorageRef
 }
 
 // RewindOnce rewinds the segment once.
-func (s *Segment) RewindOnce(ctx context.Context, segStore *SegmentStore) error {
+func (s *Segment) RewindOnce(ctx context.Context, segStore *SegmentStore) (retErr error) {
 	chain := segStore.ch
 	if s.state.GetStatus() != ichain.SegmentStatus_SegmentStatus_DISJOINTED {
 		return nil
 	}
 
-	s.le.
-		WithField("segment", s.GetId()).
-		WithField("segment-str", s.state.String()).
-		WithField("tail-height", s.state.GetTailBlockRound().String()).
-		Debug("rewinding once")
+	defer func() {
+		s.le.
+			WithField("segment", s.GetId()).
+			WithField("tail-height", s.state.GetTailBlockRound().String()).
+			WithField("error", retErr).
+			Debug("rewound once")
+	}()
+
 	tailRef := s.state.GetTailBlock()
 	tailBlk, err := block.FollowBlockRef(ctx, tailRef, chain.GetEncryptionStrategy())
 	if err != nil {
@@ -203,7 +206,8 @@ func (s *Segment) RewindOnce(ctx context.Context, segStore *SegmentStore) error 
 	}
 
 	if s.state.Status == ichain.SegmentStatus_SegmentStatus_VALID {
-		if chain.state.GetStateSegment() == "" {
+		if chain.state.GetStateSegment() == "" ||
+			chain.state.GetLastHeight() < s.state.TailBlockRound.GetHeight() {
 			chain.state.StateSegment = s.state.Id
 			chain.triggerStateRecheck()
 		}

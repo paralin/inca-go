@@ -152,10 +152,6 @@ func (b *Block) fetchChainConfig(ctx context.Context) (*inca.ChainConfig, error)
 // ValidateChild checks if a block can be the next in the sequence.
 // TODO: validate timestamps on round
 func (b *Block) ValidateChild(ctx context.Context, child *Block) error {
-	if b.validator == nil {
-		return errors.New("no application validator set, cannot validate block")
-	}
-
 	bHeader := b.header
 	childHeader := child.header
 
@@ -234,4 +230,9 @@ func (b *Block) ValidateChild(ctx context.Context, child *Block) error {
 // GetBlockRef returns the block ref.
 func (b *Block) GetBlockRef() *storageref.StorageRef {
 	return b.blkRef
+}
+
+// GetStateRef returns the state ref (shortcut).
+func (b *Block) GetStateRef() *storageref.StorageRef {
+	return b.GetHeader().GetStateRef()
 }

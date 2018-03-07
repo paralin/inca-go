@@ -4,7 +4,7 @@ import (
 	"context"
 	"os"
 
-	"github.com/Sirupsen/logrus"
+	"github.com/sirupsen/logrus"
 	"github.com/aperturerobotics/inca-go/logctx"
 	"github.com/urfave/cli"
 
