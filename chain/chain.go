@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sirupsen/logrus"
 	"github.com/aperturerobotics/inca"
 	"github.com/aperturerobotics/inca-go/block"
 	idb "github.com/aperturerobotics/inca-go/db"
@@ -27,6 +26,7 @@ import (
 	lpeer "github.com/libp2p/go-libp2p-peer"
 	"github.com/pkg/errors"
 	"github.com/satori/go.uuid"
+	"github.com/sirupsen/logrus"
 
 	// _ enables the IPFS storage ref type
 	_ "github.com/aperturerobotics/storageref/ipfs"
@@ -59,6 +59,7 @@ type Chain struct {
 	lastBlockRef    *storageref.StorageRef
 
 	blockValidator block.Validator
+	blockProposer  block.Proposer
 }
 
 // NewChain builds a new blockchain from scratch, minting a genesis block and committing it to IPFS.
@@ -69,6 +70,7 @@ func NewChain(
 	chainID string,
 	validatorPriv crypto.PrivKey,
 	blockValidator block.Validator,
+	blockProposer block.Proposer,
 ) (*Chain, error) {
 	if chainID == "" {
 		return nil, errors.New("chain id must be set")
@@ -166,9 +168,18 @@ func NewChain(
 		le:      le,
 
 		blockValidator:      blockValidator,
+		blockProposer:       blockProposer,
 		recheckStateTrigger: make(chan struct{}, 1),
 	}
-	ch.SegmentStore = NewSegmentStore(ctx, ch, idb.WithPrefix(dbm, []byte(fmt.Sprintf("/chain/%s/segments", ch.genesis.GetChainId()))), db)
+	ch.SegmentStore = NewSegmentStore(
+		ctx,
+		ch,
+		idb.WithPrefix(
+			dbm,
+			[]byte(fmt.Sprintf("/chain/%s/segments", ch.genesis.GetChainId()))),
+		db,
+	)
+
 	conf.EncryptionArgs = argsObjectWrapper
 	ch.encStrat = strat
 	ch.computePubsubTopic()
@@ -188,6 +199,7 @@ func NewChain(
 		BlockTs:    &nowTs,
 		ProposerId: validatorID.Pretty(),
 	}
+
 	firstBlockHeaderStorageRef, _, err := db.StoreObject(
 		ctx,
 		firstBlockHeader,
@@ -238,7 +250,13 @@ func NewChain(
 		return nil, err
 	}
 
-	firstBlk, err := block.GetBlock(ctx, ch.encStrat, blockValidator, ch.GetBlockDbm(), firstBlockStorageRef)
+	firstBlk, err := block.GetBlock(
+		ctx,
+		ch.encStrat,
+		blockValidator,
+		ch.GetBlockDbm(),
+		firstBlockStorageRef,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -341,6 +359,11 @@ func (c *Chain) GetGenesisRef() *storageref.StorageRef {
 // GetBlockValidator returns the block validator.
 func (c *Chain) GetBlockValidator() block.Validator {
 	return c.blockValidator
+}
+
+// GetBlockProposer returns the block proposer.
+func (c *Chain) GetBlockProposer() block.Proposer {
+	return c.blockProposer
 }
 
 // GetEncryptionStrategy returns the encryption strategy for this chain.
@@ -691,6 +714,8 @@ func (c *Chain) computeEmitSnapshot(ctx context.Context) error {
 			return nil
 		}
 	}
+
+	// Load blocks in as necessary.
 
 	c.emitNextChainState(currentSnap)
 	return nil

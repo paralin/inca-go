@@ -3,10 +3,8 @@ package chain
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 
-	"github.com/sirupsen/logrus"
 	"github.com/aperturerobotics/inca"
 	"github.com/aperturerobotics/inca-go/block"
 	"github.com/aperturerobotics/inca-go/db"
@@ -20,6 +18,8 @@ import (
 	"github.com/golang/protobuf/proto"
 	"github.com/libp2p/go-libp2p-crypto"
 	lpeer "github.com/libp2p/go-libp2p-peer"
+	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 )
 
 // Proposer controls proposing new blocks on a Chain.
@@ -30,7 +30,7 @@ type Proposer struct {
 	le          *logrus.Entry
 	dbm         db.Db
 	privKey     crypto.PrivKey
-	validatorId lpeer.ID
+	validatorID lpeer.ID
 	pubKeyBytes []byte
 	objStore    *objstore.ObjectStore
 
@@ -39,7 +39,15 @@ type Proposer struct {
 }
 
 // NewProposer builds a new Proposer.
-func NewProposer(ctx context.Context, privKey crypto.PrivKey, dbm db.Db, ch *Chain, sender NodeMessageSender, peerStore *peer.PeerStore) (*Proposer, error) {
+func NewProposer(
+	ctx context.Context,
+	privKey crypto.PrivKey,
+	dbm db.Db,
+	ch *Chain,
+	sender NodeMessageSender,
+	peerStore *peer.PeerStore,
+) (*Proposer, error) {
+	ch.GetBlockValidator()
 	le := logctx.GetLogEntry(ctx).WithField("c", "proposer")
 	pid, err := lpeer.IDFromPrivateKey(privKey)
 	if err != nil {
@@ -60,7 +68,7 @@ func NewProposer(ctx context.Context, privKey crypto.PrivKey, dbm db.Db, ch *Cha
 	if err != nil {
 		return nil, err
 	}
-	p.validatorId, err = lpeer.IDFromPrivateKey(privKey)
+	p.validatorID, err = lpeer.IDFromPrivateKey(privKey)
 	if err != nil {
 		return nil, err
 	}
@@ -108,6 +116,32 @@ func (p *Proposer) writeState(ctx context.Context) error {
 // makeProposal makes a proposal for the given state.
 func (p *Proposer) makeProposal(ctx context.Context, state *ChainStateSnapshot) (*storageref.StorageRef, *inca.BlockHeader, error) {
 	nowTs := timestamp.Now()
+	blockProposer := p.ch.GetBlockProposer()
+
+	if blockProposer == nil {
+		p.le.Debug("proposer is nil, abstaining")
+		return nil, nil, nil
+	}
+
+	lastBlock, err := block.GetBlock(
+		ctx,
+		p.ch.GetEncryptionStrategy(),
+		p.ch.GetBlockValidator(),
+		p.ch.GetBlockDbm(),
+		state.LastBlockRef,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	proposedState, err := blockProposer.ProposeBlock(ctx, lastBlock)
+	if err != nil {
+		return nil, nil, err
+	}
+	if proposedState == nil {
+		return nil, nil, nil
+	}
+
 	blockHeader := &inca.BlockHeader{
 		GenesisRef:         p.ch.GetGenesisRef(),
 		ChainConfigRef:     state.LastBlockHeader.GetChainConfigRef(),
@@ -118,7 +152,8 @@ func (p *Proposer) makeProposal(ctx context.Context, state *ChainStateSnapshot) 
 			Round:  state.BlockRoundInfo.GetRound(),
 		},
 		BlockTs:    &nowTs,
-		ProposerId: p.validatorId.Pretty(),
+		ProposerId: p.validatorID.Pretty(),
+		StateRef:   proposedState,
 	}
 
 	var blockHeaderRef *storageref.StorageRef
@@ -144,11 +179,12 @@ func (p *Proposer) makeProposal(ctx context.Context, state *ChainStateSnapshot) 
 		voteStorageRef = sr
 	}
 
-	err := p.msgSender.SendMessage(p.ctx, inca.NodeMessageType_NodeMessageType_VOTE, voteStorageRef)
-	if err != nil {
-		return nil, nil, err
-	}
-	return blockHeaderRef, blockHeader, nil
+	err = p.msgSender.SendMessage(
+		p.ctx,
+		inca.NodeMessageType_NodeMessageType_VOTE,
+		voteStorageRef,
+	)
+	return blockHeaderRef, blockHeader, err
 }
 
 type confirmedVote struct {
@@ -214,6 +250,13 @@ StateLoop:
 		blockHeaderRef, _, err := p.makeProposal(stateCtx, &nextState)
 		if err != nil {
 			p.le.WithError(err).Error("unable to make proposal")
+		}
+
+		if blockHeaderRef == nil {
+			p.le.
+				WithField("round-height", nextState.BlockRoundInfo.String()).
+				Debug("proposer decided to abstain this round")
+			continue
 		}
 
 		// Wait for the proposal to be signed by enough voting power.

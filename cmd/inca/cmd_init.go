@@ -59,7 +59,7 @@ func cmdInitCluster(p goprocess.Process) error {
 	}
 
 	le.WithField("chain-id", initChainArgs.ChainID).Debug("loading blockchain")
-	ch, err := chain.NewChain(rootContext, db, objStore, initChainArgs.ChainID, privKey, nil)
+	ch, err := chain.NewChain(rootContext, db, objStore, initChainArgs.ChainID, privKey, nil, nil)
 	if err != nil {
 		return err
 	}

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/sirupsen/logrus"
 	"github.com/aperturerobotics/inca"
 	"github.com/aperturerobotics/inca-go/db"
 	"github.com/aperturerobotics/inca-go/logctx"
@@ -19,6 +18,7 @@ import (
 	"github.com/golang/protobuf/proto"
 	"github.com/libp2p/go-libp2p-crypto"
 	lpeer "github.com/libp2p/go-libp2p-peer"
+	"github.com/sirupsen/logrus"
 )
 
 // Validator validates incoming block commit messages.
@@ -38,7 +38,14 @@ type Validator struct {
 }
 
 // NewValidator builds a new Validator.
-func NewValidator(ctx context.Context, privKey crypto.PrivKey, dbm db.Db, ch *Chain, sender NodeMessageSender, peerStore *peer.PeerStore) (*Validator, error) {
+func NewValidator(
+	ctx context.Context,
+	privKey crypto.PrivKey,
+	dbm db.Db,
+	ch *Chain,
+	sender NodeMessageSender,
+	peerStore *peer.PeerStore,
+) (*Validator, error) {
 	le := logctx.GetLogEntry(ctx).WithField("c", "validator")
 	pid, err := lpeer.IDFromPrivateKey(privKey)
 	if err != nil {
