@@ -1,0 +1,7 @@
+syntax = "proto3";
+package main;
+
+// State is the block state, in a single object.
+message State {
+  uint64 counter_val = 1;
+}

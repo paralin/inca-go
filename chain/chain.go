@@ -291,6 +291,7 @@ func FromConfig(
 	db *objstore.ObjectStore,
 	conf *ichain.Config,
 	blockValidator block.Validator,
+	blockProposer block.Proposer,
 ) (*Chain, error) {
 	le := logctx.GetLogEntry(ctx)
 	if objstore.GetObjStore(ctx) == nil {
@@ -323,6 +324,7 @@ func FromConfig(
 		le:                  le,
 		recheckStateTrigger: make(chan struct{}, 1),
 		blockValidator:      blockValidator,
+		blockProposer:       blockProposer,
 	}
 	ch.SegmentStore = NewSegmentStore(ctx, ch, idb.WithPrefix(dbm, []byte(fmt.Sprintf("/chain/%s/segments", ch.genesis.GetChainId()))), db)
 	ch.computePubsubTopic()
