@@ -4,15 +4,17 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/sirupsen/logrus"
 	"github.com/aperturerobotics/inca-go/block"
-	"github.com/aperturerobotics/inca-go/db"
 	"github.com/aperturerobotics/inca-go/encryption"
 	ichain "github.com/aperturerobotics/inca/chain"
+
 	"github.com/aperturerobotics/objstore"
+	"github.com/aperturerobotics/objstore/db"
 	"github.com/aperturerobotics/storageref"
+
 	"github.com/golang/protobuf/proto"
 	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 )
 
 // Segment is an instance of a connected or disconnected segment of the blockchain.

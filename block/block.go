@@ -6,9 +6,9 @@ import (
 	"fmt"
 
 	"github.com/aperturerobotics/inca"
-	"github.com/aperturerobotics/inca-go/db"
 	"github.com/aperturerobotics/inca-go/encryption"
 	iblock "github.com/aperturerobotics/inca/block"
+	"github.com/aperturerobotics/objstore/db"
 	"github.com/aperturerobotics/pbobject"
 	"github.com/aperturerobotics/storageref"
 	"github.com/golang/protobuf/proto"

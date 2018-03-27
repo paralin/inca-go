@@ -8,13 +8,15 @@ import (
 	"time"
 
 	"github.com/aperturerobotics/inca"
-	"github.com/aperturerobotics/inca-go/db"
 	"github.com/aperturerobotics/inca-go/logctx"
 	"github.com/aperturerobotics/inca-go/peer"
 	ichain "github.com/aperturerobotics/inca/chain"
+
 	"github.com/aperturerobotics/objstore"
+	"github.com/aperturerobotics/objstore/db"
 	"github.com/aperturerobotics/pbobject"
 	"github.com/aperturerobotics/storageref"
+
 	"github.com/golang/protobuf/proto"
 	"github.com/libp2p/go-libp2p-crypto"
 	lpeer "github.com/libp2p/go-libp2p-peer"

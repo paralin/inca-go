@@ -8,12 +8,13 @@ import (
 
 	"github.com/aperturerobotics/inca-go/chain"
 	"github.com/aperturerobotics/inca-go/cmd/inca/validators"
-	"github.com/aperturerobotics/inca-go/db"
 	"github.com/aperturerobotics/inca-go/logctx"
 	"github.com/aperturerobotics/inca-go/node"
 	"github.com/aperturerobotics/inca-go/shell"
 	ichain "github.com/aperturerobotics/inca/chain"
+
 	"github.com/aperturerobotics/objstore"
+	dbcli "github.com/aperturerobotics/objstore/db/cli"
 	"github.com/aperturerobotics/objstore/ipfs"
 	"github.com/aperturerobotics/objstore/localdb"
 
@@ -109,7 +110,7 @@ func runCounterExample(c *cli.Context) error {
 		return err
 	}
 
-	dbm, err := db.BuildCliDb(le)
+	dbm, err := dbcli.BuildCliDb(le)
 	if err != nil {
 		return err
 	}

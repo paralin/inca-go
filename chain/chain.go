@@ -10,23 +10,27 @@ import (
 
 	"github.com/aperturerobotics/inca"
 	"github.com/aperturerobotics/inca-go/block"
-	idb "github.com/aperturerobotics/inca-go/db"
 	"github.com/aperturerobotics/inca-go/encryption"
 	"github.com/aperturerobotics/inca-go/encryption/convergentimmutable"
 	"github.com/aperturerobotics/inca-go/encryption/impl"
 	"github.com/aperturerobotics/inca-go/logctx"
 	"github.com/aperturerobotics/inca-go/peer"
 	ichain "github.com/aperturerobotics/inca/chain"
+
 	"github.com/aperturerobotics/objstore"
+	idb "github.com/aperturerobotics/objstore/db"
+
 	"github.com/aperturerobotics/pbobject"
 	"github.com/aperturerobotics/storageref"
 	"github.com/aperturerobotics/timestamp"
+
 	"github.com/golang/protobuf/proto"
-	"github.com/libp2p/go-libp2p-crypto"
-	lpeer "github.com/libp2p/go-libp2p-peer"
 	"github.com/pkg/errors"
 	"github.com/satori/go.uuid"
 	"github.com/sirupsen/logrus"
+
+	"github.com/libp2p/go-libp2p-crypto"
+	lpeer "github.com/libp2p/go-libp2p-peer"
 
 	// _ enables the IPFS storage ref type
 	_ "github.com/aperturerobotics/storageref/ipfs"
@@ -637,18 +641,27 @@ func (c *Chain) computeEmitSnapshot(ctx context.Context) error {
 	chainConfig := &inca.ChainConfig{}
 	{
 		encConf := c.encStrat.GetBlockEncryptionConfigWithDigest(
-			c.lastBlockHeader.GetNextChainConfigRef().GetObjectDigest(),
+			c.lastBlockHeader.
+				GetNextChainConfigRef().
+				GetObjectDigest(),
 		)
 		subCtx := pbobject.WithEncryptionConf(ctx, &encConf)
-		err := c.lastBlockHeader.GetNextChainConfigRef().FollowRef(subCtx, nil, chainConfig)
+		err := c.lastBlockHeader.
+			GetNextChainConfigRef().
+			FollowRef(subCtx, nil, chainConfig)
 		if err != nil {
 			return err
 		}
 	}
 
-	roundDuration := time.Duration(chainConfig.GetTimingConfig().GetRoundLength()) * time.Millisecond
+	roundDuration := time.Millisecond * time.Duration(
+		chainConfig.GetTimingConfig().GetRoundLength(),
+	)
 	if roundDuration < (1 * time.Second) {
-		return errors.Errorf("configured round duration too short: %s", roundDuration.String())
+		return errors.Errorf(
+			"configured round duration too short: %s",
+			roundDuration.String(),
+		)
 	}
 
 	expectedRoundCount := uint64(sinceLastBlock / roundDuration)
@@ -657,9 +670,13 @@ func (c *Chain) computeEmitSnapshot(ctx context.Context) error {
 		currRound = expectedRoundCount
 	}
 
-	roundStartDuration := time.Millisecond * time.Duration(chainConfig.GetTimingConfig().GetMinProposeAfterBlock())
+	roundStartDuration := time.Millisecond * time.Duration(
+		chainConfig.GetTimingConfig().GetMinProposeAfterBlock(),
+	)
 	c.state.LastRound = currRound
-	roundStartTime := lastBlockTs.Add(roundStartDuration + (roundDuration * time.Duration(currRound)))
+	roundStartTime := lastBlockTs.Add(
+		roundStartDuration + (roundDuration * time.Duration(currRound)),
+	)
 	roundEndTime := roundStartTime.Add(
 		roundDuration,
 	)
@@ -711,7 +728,8 @@ func (c *Chain) computeEmitSnapshot(ctx context.Context) error {
 		case !lastSnap.RoundEndTime.Equal(roundEndTime):
 		case !lastSnap.RoundStartTime.Equal(roundStartTime):
 		case currentSnap.RoundStarted != lastSnap.RoundStarted:
-		case lastSnap.CurrentProposer == nil || bytes.Compare(lastSnap.CurrentProposer.PubKey, proposer.GetPubKey()) != 0:
+		case lastSnap.CurrentProposer == nil ||
+			bytes.Compare(lastSnap.CurrentProposer.PubKey, proposer.GetPubKey()) != 0:
 		default:
 			return nil
 		}

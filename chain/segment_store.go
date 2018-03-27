@@ -7,14 +7,16 @@ import (
 	"path"
 	"sync"
 
-	"github.com/sirupsen/logrus"
 	"github.com/aperturerobotics/inca-go/block"
-	"github.com/aperturerobotics/inca-go/db"
 	"github.com/aperturerobotics/inca-go/logctx"
 	ichain "github.com/aperturerobotics/inca/chain"
+
 	"github.com/aperturerobotics/objstore"
+	"github.com/aperturerobotics/objstore/db"
 	"github.com/aperturerobotics/storageref"
+
 	"github.com/satori/go.uuid"
+	"github.com/sirupsen/logrus"
 )
 
 // SegmentStore keeps track of Segments in memory.
@@ -74,6 +76,16 @@ func (s *SegmentStore) rewindOnce(ctx context.Context) {
 	if err := nextSeg.RewindOnce(ctx, s); err != nil {
 		s.le.WithError(err).Warn("issue rewinding segment")
 		return
+	}
+
+	if prevSegID := nextSeg.state.GetSegmentPrev(); prevSegID != "" {
+		prevSeg, err := s.GetSegmentById(ctx, prevSegID)
+		if err != nil {
+			s.le.WithError(err).Warn("issue rewinding parent of segment")
+			return
+		}
+
+		nextSeg = prevSeg
 	}
 
 	if nextSeg.state.GetStatus() == ichain.SegmentStatus_SegmentStatus_DISJOINTED {

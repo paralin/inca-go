@@ -6,23 +6,23 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/sirupsen/logrus"
 	"github.com/aperturerobotics/inca"
 	"github.com/aperturerobotics/inca-go/chain"
-	"github.com/aperturerobotics/inca-go/db"
 	"github.com/aperturerobotics/inca-go/logctx"
 	"github.com/aperturerobotics/inca-go/peer"
+
 	"github.com/aperturerobotics/objstore"
+	"github.com/aperturerobotics/objstore/db"
 	"github.com/aperturerobotics/pbobject"
 	"github.com/aperturerobotics/storageref"
 	"github.com/aperturerobotics/timestamp"
-	"github.com/golang/protobuf/proto"
-	"github.com/jbenet/goprocess"
 
+	"github.com/golang/protobuf/proto"
 	api "github.com/ipfs/go-ipfs-api"
+	"github.com/jbenet/goprocess"
 	"github.com/libp2p/go-libp2p-crypto"
 	lpeer "github.com/libp2p/go-libp2p-peer"
-	// "github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 )
 
 // Node is an instance of an Inca p2p node.
@@ -206,7 +206,11 @@ func (n *Node) GetProcess() goprocess.Process {
 }
 
 // SendMessage submits a message to the node pubsub.
-func (n *Node) SendMessage(ctx context.Context, msgType inca.NodeMessageType, msgInnerRef *storageref.StorageRef) error {
+func (n *Node) SendMessage(
+	ctx context.Context,
+	msgType inca.NodeMessageType,
+	msgInnerRef *storageref.StorageRef,
+) error {
 	// Build the NodeMessage object
 	nm := &inca.NodeMessage{
 		MessageType: msgType,

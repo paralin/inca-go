@@ -4,10 +4,11 @@ import (
 	"context"
 	"sync"
 
-	"github.com/aperturerobotics/inca-go/db"
 	"github.com/aperturerobotics/inca-go/encryption"
 	"github.com/aperturerobotics/inca-go/logctx"
 	"github.com/aperturerobotics/objstore"
+	"github.com/aperturerobotics/objstore/db"
+
 	"github.com/libp2p/go-libp2p-crypto"
 	lpeer "github.com/libp2p/go-libp2p-peer"
 )

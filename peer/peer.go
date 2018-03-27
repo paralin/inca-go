@@ -7,19 +7,21 @@ import (
 	"sync"
 	"time"
 
-	"github.com/sirupsen/logrus"
 	"github.com/aperturerobotics/inca"
 	"github.com/aperturerobotics/inca-go/block"
-	dbm "github.com/aperturerobotics/inca-go/db"
 	"github.com/aperturerobotics/inca-go/encryption"
 	ipeer "github.com/aperturerobotics/inca/peer"
+
 	"github.com/aperturerobotics/objstore"
+	dbm "github.com/aperturerobotics/objstore/db"
 	"github.com/aperturerobotics/pbobject"
 	"github.com/aperturerobotics/storageref"
+
 	"github.com/golang/protobuf/proto"
 	"github.com/libp2p/go-libp2p-crypto"
 	lpeer "github.com/libp2p/go-libp2p-peer"
 	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 )
 
 // Peer is an observed remote node.

@@ -3,15 +3,16 @@ package main
 import (
 	"sync"
 
-	"github.com/aperturerobotics/inca-go/db"
 	"github.com/aperturerobotics/inca-go/logctx"
+	"github.com/aperturerobotics/objstore/db"
+	dbcli "github.com/aperturerobotics/objstore/db/cli"
 )
 
 var dbMtx sync.Mutex
 var dbCached db.Db
 
 func init() {
-	incaFlags = append(incaFlags, db.DbFlags...)
+	incaFlags = append(incaFlags, dbcli.DbFlags...)
 }
 
 // GetDb builds / returns the db.
@@ -24,7 +25,7 @@ func GetDb() (db.Db, error) {
 	}
 
 	le := logctx.GetLogEntry(rootContext)
-	d, err := db.BuildCliDb(le)
+	d, err := dbcli.BuildCliDb(le)
 	if err != nil {
 		return nil, err
 	}
