@@ -151,12 +151,13 @@ func (b *Block) fetchChainConfig(ctx context.Context) (*inca.ChainConfig, error)
 
 // ValidateChild checks if a block can be the next in the sequence.
 // TODO: validate timestamps on round
-func (b *Block) ValidateChild(ctx context.Context, child *Block) error {
+// Returns markValid, which indicates that the block should be considered valid without a known parent.
+func (b *Block) ValidateChild(ctx context.Context, child *Block) (bool, error) {
 	bHeader := b.header
 	childHeader := child.header
 
 	if !bHeader.GetGenesisRef().Equals(childHeader.GetGenesisRef()) {
-		return errors.New("genesis reference mismatch")
+		return false, errors.New("genesis reference mismatch")
 	}
 
 	bTs := b.header.GetBlockTs().ToTime()
@@ -168,25 +169,25 @@ func (b *Block) ValidateChild(ctx context.Context, child *Block) error {
 
 	childExpectedHeight := bRoundInfo.GetHeight() + 1
 	if childRoundInfo.GetHeight() != childExpectedHeight {
-		return errors.Errorf("child height %d != expected %d", childRoundInfo.GetHeight(), childExpectedHeight)
+		return false, errors.Errorf("child height %d != expected %d", childRoundInfo.GetHeight(), childExpectedHeight)
 	}
 
 	if childTs.Before(bTs) {
-		return errors.Errorf("child timestamp %s before parent %s", childTs.String(), bTs.String())
+		return false, errors.Errorf("child timestamp %s before parent %s", childTs.String(), bTs.String())
 	}
 
 	chainConf, err := b.fetchChainConfig(ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	// TODO: allow mutataing chain config
 	if !bHeader.GetChainConfigRef().Equals(childHeader.GetChainConfigRef()) {
-		return errors.New("child chain config does not match parent")
+		return false, errors.New("child chain config does not match parent")
 	}
 
 	if !bHeader.GetChainConfigRef().Equals(childHeader.GetNextChainConfigRef()) {
-		return errors.New("child next chain config does not match parent")
+		return false, errors.New("child next chain config does not match parent")
 	}
 
 	valSet := &inca.ValidatorSet{}
@@ -194,7 +195,7 @@ func (b *Block) ValidateChild(ctx context.Context, child *Block) error {
 		encConf := b.encStrat.GetBlockEncryptionConfigWithDigest(chainConf.GetValidatorSetRef().GetObjectDigest())
 		subCtx := pbobject.WithEncryptionConf(ctx, &encConf)
 		if err := chainConf.GetValidatorSetRef().FollowRef(subCtx, nil, valSet); err != nil {
-			return err
+			return false, err
 		}
 	}
 
@@ -204,27 +205,25 @@ func (b *Block) ValidateChild(ctx context.Context, child *Block) error {
 		childRoundInfo.GetRound(),
 	)
 	if selValidator == nil {
-		return errors.New("selected validator was nil")
+		return false, errors.New("selected validator was nil")
 	}
 
 	childValidatorID := childHeader.GetProposerId()
 	selValidatorID, _, err := selValidator.ParsePeerID()
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	if selValidatorID.Pretty() != childValidatorID {
-		return errors.Errorf("expected validator for (%d, %d) %s != actual %s", childRoundInfo.GetHeight(), childRoundInfo.GetRound(), selValidatorID.Pretty(), childValidatorID)
+		return false, errors.Errorf("expected validator for (%d, %d) %s != actual %s", childRoundInfo.GetHeight(), childRoundInfo.GetRound(), selValidatorID.Pretty(), childValidatorID)
 	}
 
 	// TODO: decide if this is always required.
 	if b.validator != nil {
-		if err := b.validator.ValidateBlock(child, b); err != nil {
-			return err
-		}
+		return b.validator.ValidateBlock(ctx, child, b)
 	}
 
-	return nil
+	return false, nil
 }
 
 // GetBlockRef returns the block ref.

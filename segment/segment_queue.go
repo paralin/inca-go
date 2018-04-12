@@ -1,4 +1,4 @@
-package chain
+package segment
 
 import (
 	"container/heap"

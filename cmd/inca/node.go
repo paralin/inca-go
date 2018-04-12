@@ -7,9 +7,9 @@ import (
 	"sync"
 
 	"github.com/aperturerobotics/inca-go/chain"
-	"github.com/aperturerobotics/inca-go/cmd/inca/validators"
 	"github.com/aperturerobotics/inca-go/logctx"
 	"github.com/aperturerobotics/inca-go/node"
+	"github.com/aperturerobotics/inca-go/validators"
 	ichain "github.com/aperturerobotics/inca/chain"
 	"github.com/aperturerobotics/objstore"
 	"github.com/golang/protobuf/jsonpb"

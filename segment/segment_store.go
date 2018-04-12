@@ -1,4 +1,4 @@
-package chain
+package segment
 
 import (
 	"context"
@@ -8,8 +8,9 @@ import (
 	"sync"
 
 	"github.com/aperturerobotics/inca-go/block"
+	"github.com/aperturerobotics/inca-go/encryption"
 	"github.com/aperturerobotics/inca-go/logctx"
-	ichain "github.com/aperturerobotics/inca/chain"
+	isegment "github.com/aperturerobotics/inca/segment"
 
 	"github.com/aperturerobotics/objstore"
 	"github.com/aperturerobotics/objstore/db"
@@ -23,7 +24,6 @@ import (
 type SegmentStore struct {
 	ctx             context.Context
 	le              *logrus.Entry
-	ch              *Chain
 	segmentMap      sync.Map // map[string]*Segment (by id)
 	dbm             db.Db
 	segmentDbm      db.Db
@@ -32,18 +32,19 @@ type SegmentStore struct {
 	segmentNotifyCh <-chan *Segment
 }
 
-// NewSegmentStore builds a new SegmentStore.
+// NewSegmentStore builds a new SegmentStore, with a management goroutine.
 func NewSegmentStore(
 	ctx context.Context,
-	ch *Chain,
 	dbm db.Db,
 	objStore *objstore.ObjectStore,
+	encStrat encryption.Strategy,
+	blockValidator block.Validator,
+	blockDbm db.Db,
 ) *SegmentStore {
 	le := logctx.GetLogEntry(ctx)
 	segmentNotifyCh := make(chan *Segment, 5)
-	return &SegmentStore{
+	ss := &SegmentStore{
 		ctx:             ctx,
-		ch:              ch,
 		dbm:             dbm,
 		segmentDbm:      db.WithPrefix(dbm, []byte("/segments")),
 		objStore:        objStore,
@@ -51,10 +52,17 @@ func NewSegmentStore(
 		segmentNotifyCh: segmentNotifyCh,
 		segmentQueue:    NewSegmentQueue(segmentNotifyCh),
 	}
+	go ss.manageSegmentStore(ctx, encStrat, blockValidator, blockDbm)
+	return ss
 }
 
 // manageSegmentStore manages the segment store.
-func (s *SegmentStore) manageSegmentStore(ctx context.Context) {
+func (s *SegmentStore) manageSegmentStore(
+	ctx context.Context,
+	encStrat encryption.Strategy,
+	blockValidator block.Validator,
+	blockDbm db.Db,
+) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -62,18 +70,23 @@ func (s *SegmentStore) manageSegmentStore(ctx context.Context) {
 		case <-s.segmentNotifyCh:
 		}
 
-		s.rewindOnce(ctx)
+		s.rewindOnce(ctx, encStrat, blockValidator, blockDbm)
 	}
 }
 
 // rewindOnce rewinds the highest priority segment by one.
-func (s *SegmentStore) rewindOnce(ctx context.Context) {
+func (s *SegmentStore) rewindOnce(
+	ctx context.Context,
+	encStrat encryption.Strategy,
+	blockValidator block.Validator,
+	blockDbm db.Db,
+) {
 	nextSeg := s.segmentQueue.Pop()
 	if nextSeg == nil {
 		return
 	}
 
-	if err := nextSeg.RewindOnce(ctx, s); err != nil {
+	if err := nextSeg.RewindOnce(ctx, s, encStrat, blockValidator, blockDbm); err != nil {
 		s.le.WithError(err).Warn("issue rewinding segment")
 		return
 	}
@@ -88,7 +101,7 @@ func (s *SegmentStore) rewindOnce(ctx context.Context) {
 		nextSeg = prevSeg
 	}
 
-	if nextSeg.state.GetStatus() == ichain.SegmentStatus_SegmentStatus_DISJOINTED {
+	if nextSeg.state.GetStatus() == isegment.SegmentStatus_SegmentStatus_DISJOINTED {
 		s.segmentQueue.Push(nextSeg)
 	}
 }
@@ -161,7 +174,7 @@ func (s *SegmentStore) NewSegment(ctx context.Context, blk *block.Block, blkRef 
 
 	seg.state.Id = segmentID
 	seg.state.HeadBlock = blkRef
-	seg.state.Status = ichain.SegmentStatus_SegmentStatus_DISJOINTED
+	seg.state.Status = isegment.SegmentStatus_SegmentStatus_DISJOINTED
 	seg.state.TailBlock = blkRef
 	seg.state.TailBlockRound = blk.GetHeader().GetRoundInfo()
 	if err := seg.writeState(ctx); err != nil {

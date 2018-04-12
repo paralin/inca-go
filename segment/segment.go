@@ -1,4 +1,4 @@
-package chain
+package segment
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 
 	"github.com/aperturerobotics/inca-go/block"
 	"github.com/aperturerobotics/inca-go/encryption"
-	ichain "github.com/aperturerobotics/inca/chain"
+	isegment "github.com/aperturerobotics/inca/segment"
 
 	"github.com/aperturerobotics/objstore"
 	"github.com/aperturerobotics/objstore/db"
@@ -19,7 +19,7 @@ import (
 
 // Segment is an instance of a connected or disconnected segment of the blockchain.
 type Segment struct {
-	state ichain.SegmentState
+	state isegment.SegmentState
 	ctx   context.Context       // Ctx is canceled when the segment is removed from memory
 	db    *objstore.ObjectStore // Db is the object store
 	dbm   db.Db                 // Dbm is the local key/value store
@@ -32,8 +32,18 @@ func (s *Segment) GetId() string {
 }
 
 // GetStatus returns the status of the segment.
-func (s *Segment) GetStatus() ichain.SegmentStatus {
+func (s *Segment) GetStatus() isegment.SegmentStatus {
 	return s.state.GetStatus()
+}
+
+// GetSegmentNext returns the ID of the next segment.
+func (s *Segment) GetSegmentNext() string {
+	return s.state.GetSegmentNext()
+}
+
+// GetHeadBlock returns the reference to the head block.
+func (s *Segment) GetHeadBlock() *storageref.StorageRef {
+	return s.state.GetHeadBlock()
 }
 
 // dbkey returns the database key of this segment.
@@ -68,7 +78,13 @@ func (s *Segment) readState(ctx context.Context) error {
 }
 
 // AppendBlock attempts to append a block to the segment.
-func (s *Segment) AppendBlock(ctx context.Context, blkRef *storageref.StorageRef, blk *block.Block, blkParent *block.Block, encStrat encryption.Strategy) error {
+func (s *Segment) AppendBlock(
+	ctx context.Context,
+	blkRef *storageref.StorageRef,
+	blk *block.Block,
+	blkParent *block.Block,
+	encStrat encryption.Strategy,
+) error {
 	blkParentNextRef := blkParent.GetNextBlock()
 	if blkParentNextRef != nil {
 		blkParentNext, err := block.FollowBlockRef(ctx, blkParentNextRef, encStrat)
@@ -89,7 +105,8 @@ func (s *Segment) AppendBlock(ctx context.Context, blkRef *storageref.StorageRef
 		return errors.Errorf("fork: next segment already exists")
 	}
 
-	if err := blkParent.ValidateChild(ctx, blk); err != nil {
+	isValid, err := blkParent.ValidateChild(ctx, blk)
+	if err != nil {
 		return err
 	}
 
@@ -104,6 +121,10 @@ func (s *Segment) AppendBlock(ctx context.Context, blkRef *storageref.StorageRef
 	}
 
 	s.state.HeadBlock = blkRef
+	if isValid && s.state.Status != isegment.SegmentStatus_SegmentStatus_INVALID {
+		s.state.Status = isegment.SegmentStatus_SegmentStatus_VALID
+	}
+
 	if err := s.writeState(ctx); err != nil {
 		return err
 	}
@@ -112,9 +133,14 @@ func (s *Segment) AppendBlock(ctx context.Context, blkRef *storageref.StorageRef
 }
 
 // RewindOnce rewinds the segment once.
-func (s *Segment) RewindOnce(ctx context.Context, segStore *SegmentStore) (retErr error) {
-	chain := segStore.ch
-	if s.state.GetStatus() != ichain.SegmentStatus_SegmentStatus_DISJOINTED {
+func (s *Segment) RewindOnce(
+	ctx context.Context,
+	segStore *SegmentStore,
+	encStrat encryption.Strategy,
+	blockValidator block.Validator,
+	blockDbm db.Db,
+) (retErr error) {
+	if s.state.GetStatus() != isegment.SegmentStatus_SegmentStatus_DISJOINTED {
 		return nil
 	}
 
@@ -127,23 +153,23 @@ func (s *Segment) RewindOnce(ctx context.Context, segStore *SegmentStore) (retEr
 	}()
 
 	tailRef := s.state.GetTailBlock()
-	tailBlk, err := block.FollowBlockRef(ctx, tailRef, chain.GetEncryptionStrategy())
+	tailBlk, err := block.FollowBlockRef(ctx, tailRef, encStrat)
 	if err != nil {
 		return err
 	}
 
 	tailBlkObj, err := block.GetBlock(
 		ctx,
-		chain.GetEncryptionStrategy(),
-		chain.GetBlockValidator(),
-		chain.GetBlockDbm(),
+		encStrat,
+		blockValidator,
+		blockDbm,
 		tailRef,
 	)
 	if err != nil {
 		return err
 	}
 
-	tailBlkHeader, err := block.FollowBlockHeaderRef(ctx, tailBlk.GetBlockHeaderRef(), chain.GetEncryptionStrategy())
+	tailBlkHeader, err := block.FollowBlockHeaderRef(ctx, tailBlk.GetBlockHeaderRef(), encStrat)
 	if err != nil {
 		return err
 	}
@@ -151,9 +177,9 @@ func (s *Segment) RewindOnce(ctx context.Context, segStore *SegmentStore) (retEr
 	prevBlockRef := tailBlkHeader.GetLastBlockRef()
 	prevBlk, err := block.GetBlock(
 		ctx,
-		chain.GetEncryptionStrategy(),
-		chain.GetBlockValidator(),
-		chain.GetBlockDbm(),
+		encStrat,
+		blockValidator,
+		blockDbm,
 		prevBlockRef,
 	)
 	if err != nil {
@@ -171,7 +197,13 @@ func (s *Segment) RewindOnce(ctx context.Context, segStore *SegmentStore) (retEr
 			return errors.New("previous segment resolved to same segment")
 		}
 
-		return prevSegment.AppendSegment(ctx, segStore.ch, s)
+		return prevSegment.AppendSegment(
+			ctx,
+			s,
+			encStrat,
+			blockValidator,
+			blockDbm,
+		)
 	}
 
 	// Include in this segment
@@ -184,54 +216,67 @@ func (s *Segment) RewindOnce(ctx context.Context, segStore *SegmentStore) (retEr
 	s.state.TailBlock = prevBlockRef
 	s.state.TailBlockRound = prevBlk.GetHeader().GetRoundInfo()
 
-	if err := prevBlk.ValidateChild(ctx, tailBlkObj); err != nil {
+	isValid, err := prevBlk.ValidateChild(ctx, tailBlkObj)
+	if err != nil {
 		s.le.WithError(err).Warn("segment rewound to invalid block, marking as invalid")
-		s.state.Status = ichain.SegmentStatus_SegmentStatus_INVALID
+		s.state.Status = isegment.SegmentStatus_SegmentStatus_INVALID
 	}
 
-	if s.state.Status == ichain.SegmentStatus_SegmentStatus_DISJOINTED {
+	if isValid && s.state.Status != isegment.SegmentStatus_SegmentStatus_INVALID {
+		s.le.Info("one or more validators verified this block, marking segment as valid")
+		s.state.Status = isegment.SegmentStatus_SegmentStatus_VALID
+	}
+
+	/* Re-implement this check in the event handler in chain.
+	if s.state.Status == isegment.SegmentStatus_SegmentStatus_DISJOINTED {
 		prevBlkRound := prevBlk.GetHeader().GetRoundInfo()
-		// TODO: more checking here.
 		if prevBlkRound.GetHeight() == 0 {
 			if prevBlk.GetHeader().GetChainConfigRef().Equals(chain.GetGenesis().GetInitChainConfigRef()) {
 				s.le.Info("traversed to the genesis block, marking segment as valid")
-				s.state.Status = ichain.SegmentStatus_SegmentStatus_VALID
+				s.state.Status = isegment.SegmentStatus_SegmentStatus_VALID
 			} else {
 				s.le.Warn("segment terminates at invalid genesis")
-				s.state.Status = ichain.SegmentStatus_SegmentStatus_INVALID
+				s.state.Status = isegment.SegmentStatus_SegmentStatus_INVALID
 			}
 		}
 	}
+	*/
 
 	if err := s.writeState(ctx); err != nil {
 		return err
 	}
 
-	if s.state.Status == ichain.SegmentStatus_SegmentStatus_VALID {
-		if chain.state.GetStateSegment() == "" ||
-			chain.state.GetLastHeight() < s.state.TailBlockRound.GetHeight() {
-			chain.state.StateSegment = s.state.Id
-			chain.triggerStateRecheck()
+	/*
+		if s.state.Status == isegment.SegmentStatus_SegmentStatus_VALID {
+			if chain.state.GetStateSegment() == "" ||
+				chain.state.GetLastHeight() < s.state.TailBlockRound.GetHeight() {
+				chain.state.StateSegment = s.state.Id
+				chain.triggerStateRecheck()
+			}
 		}
-	}
+	*/
 
 	return nil
 }
 
 // AppendSegment attempts to append a segment to the Segment.
-func (s *Segment) AppendSegment(ctx context.Context, ch *Chain, segNext *Segment) error {
-	if segNext.state.GetStatus() != ichain.SegmentStatus_SegmentStatus_DISJOINTED {
+func (s *Segment) AppendSegment(
+	ctx context.Context,
+	segNext *Segment,
+	encStrat encryption.Strategy,
+	blockValidator block.Validator,
+	blockDbm db.Db,
+) error {
+	if segNext.state.GetStatus() != isegment.SegmentStatus_SegmentStatus_DISJOINTED {
 		return errors.Errorf("unexpected status: %v", segNext.state.GetStatus())
 	}
-
-	encStrat := ch.GetEncryptionStrategy()
 
 	tailRef := segNext.state.GetTailBlock()
 	tailBlk, err := block.GetBlock(
 		ctx,
 		encStrat,
-		ch.GetBlockValidator(),
-		ch.GetBlockDbm(),
+		blockValidator,
+		blockDbm,
 		tailRef,
 	)
 	if err != nil {
@@ -242,22 +287,27 @@ func (s *Segment) AppendSegment(ctx context.Context, ch *Chain, segNext *Segment
 	sHeadBlk, err := block.GetBlock(
 		ctx,
 		encStrat,
-		ch.GetBlockValidator(),
-		ch.GetBlockDbm(),
+		blockValidator,
+		blockDbm,
 		sHeadRef,
 	)
 	if err != nil {
 		return err
 	}
 
-	if err := sHeadBlk.ValidateChild(ctx, tailBlk); err != nil {
-		segNext.state.Status = ichain.SegmentStatus_SegmentStatus_INVALID
+	isValid, err := sHeadBlk.ValidateChild(ctx, tailBlk)
+	if err != nil {
+		segNext.state.Status = isegment.SegmentStatus_SegmentStatus_INVALID
 		s.le.
 			WithError(err).
 			WithField("segment", segNext.GetId()).
 			Warn("marking would-be child segment as invalid")
 
 		return segNext.writeState(ctx)
+	}
+
+	if isValid && segNext.state.Status == isegment.SegmentStatus_SegmentStatus_DISJOINTED {
+		segNext.state.Status = isegment.SegmentStatus_SegmentStatus_VALID
 	}
 
 	s.le.WithField("next-seg", segNext.GetId()).Debug("appended segment")

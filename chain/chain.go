@@ -15,7 +15,9 @@ import (
 	"github.com/aperturerobotics/inca-go/encryption/impl"
 	"github.com/aperturerobotics/inca-go/logctx"
 	"github.com/aperturerobotics/inca-go/peer"
+	"github.com/aperturerobotics/inca-go/segment"
 	ichain "github.com/aperturerobotics/inca/chain"
+	isegment "github.com/aperturerobotics/inca/segment"
 
 	"github.com/aperturerobotics/objstore"
 	idb "github.com/aperturerobotics/objstore/db"
@@ -40,7 +42,7 @@ var genesisKey = "/genesis"
 
 // Chain is an instance of a blockchain.
 type Chain struct {
-	*SegmentStore
+	*segment.SegmentStore
 	ctx                 context.Context
 	db                  *objstore.ObjectStore
 	dbm                 idb.Db
@@ -175,13 +177,15 @@ func NewChain(
 		blockProposer:       blockProposer,
 		recheckStateTrigger: make(chan struct{}, 1),
 	}
-	ch.SegmentStore = NewSegmentStore(
+	ch.SegmentStore = segment.NewSegmentStore(
 		ctx,
-		ch,
 		idb.WithPrefix(
 			dbm,
 			[]byte(fmt.Sprintf("/chain/%s/segments", ch.genesis.GetChainId()))),
 		db,
+		ch.GetEncryptionStrategy(),
+		ch.GetBlockValidator(),
+		ch.GetBlockDbm(),
 	)
 
 	conf.EncryptionArgs = argsObjectWrapper
@@ -244,9 +248,9 @@ func NewChain(
 
 	var firstSegDigest []byte
 	uid, _ := uuid.NewV4()
-	firstSeg := &ichain.SegmentState{
+	firstSeg := &isegment.SegmentState{
 		Id:        uid.String(),
-		Status:    ichain.SegmentStatus_SegmentStatus_VALID,
+		Status:    isegment.SegmentStatus_SegmentStatus_VALID,
 		HeadBlock: firstBlockStorageRef,
 		TailBlock: firstBlockStorageRef,
 	}
@@ -270,13 +274,13 @@ func NewChain(
 		return nil, err
 	}
 
-	firstBlk.State.SegmentId = seg.state.Id
+	firstBlk.State.SegmentId = seg.GetId()
 	if err := firstBlk.WriteState(ctx); err != nil {
 		return nil, err
 	}
 
 	ch.state = ichain.ChainState{
-		StateSegment: seg.state.Id,
+		StateSegment: seg.GetId(),
 	}
 
 	if err := ch.writeState(ctx); err != nil {
@@ -284,7 +288,6 @@ func NewChain(
 	}
 
 	go ch.manageState()
-	go ch.SegmentStore.manageSegmentStore(ctx)
 	return ch, nil
 }
 
@@ -330,7 +333,14 @@ func FromConfig(
 		blockValidator:      blockValidator,
 		blockProposer:       blockProposer,
 	}
-	ch.SegmentStore = NewSegmentStore(ctx, ch, idb.WithPrefix(dbm, []byte(fmt.Sprintf("/chain/%s/segments", ch.genesis.GetChainId()))), db)
+	ch.SegmentStore = segment.NewSegmentStore(
+		ctx,
+		idb.WithPrefix(dbm, []byte(fmt.Sprintf("/chain/%s/segments", ch.genesis.GetChainId()))),
+		db,
+		ch.GetEncryptionStrategy(),
+		ch.GetBlockValidator(),
+		ch.GetBlockDbm(),
+	)
 	ch.computePubsubTopic()
 
 	if err := ch.readState(ctx); err != nil {
@@ -338,7 +348,6 @@ func FromConfig(
 	}
 
 	go ch.manageState()
-	go ch.SegmentStore.manageSegmentStore(ctx)
 	return ch, nil
 }
 
@@ -453,7 +462,8 @@ func (c *Chain) HandleBlockCommit(
 		return err
 	}
 
-	c.SegmentStore.segmentQueue.Push(seg)
+	// c.SegmentStore.segmentQueue.Push(seg)
+	_ = seg
 	return nil
 }
 
@@ -549,41 +559,44 @@ func (c *Chain) manageState() {
 
 func (c *Chain) manageStateOnce(ctx context.Context) error {
 	// Evaluate current state
-	stateSegmentId := c.state.GetStateSegment()
-	if stateSegmentId == "" {
+	stateSegmentID := c.state.GetStateSegment()
+	if stateSegmentID == "" {
 		return errors.New("no current state segment")
 	}
 
-	seg, err := c.GetSegmentById(ctx, stateSegmentId)
+	seg, err := c.GetSegmentById(ctx, stateSegmentID)
 	if err != nil {
 		return err
 	}
 
-	segmentState := &seg.state
 	// Check if we should fast-forward the segment.
-	for segmentState.GetSegmentNext() != "" {
-		nextSegment, err := c.GetSegmentById(ctx, segmentState.GetSegmentNext())
+	if nextSegmentID := seg.GetSegmentNext(); nextSegmentID != "" {
+		nextSegment, err := c.GetSegmentById(ctx, nextSegmentID)
 		if err != nil {
 			return err
 		}
 
-		c.state.StateSegment = segmentState.GetSegmentNext()
+		c.state.StateSegment = nextSegmentID
 		if err := c.writeState(ctx); err != nil {
 			return err
 		}
 
-		segmentState = &nextSegment.state
 		seg = nextSegment
 	}
 
-	headDigest := segmentState.GetHeadBlock().GetObjectDigest()
+	headBlockRef := seg.GetHeadBlock()
+	headDigest := headBlockRef.GetObjectDigest()
 	if bytes.Compare(headDigest, c.lastHeadDigest) != 0 {
-		headBlock, err := block.FollowBlockRef(ctx, segmentState.GetHeadBlock(), c.encStrat)
+		headBlock, err := block.FollowBlockRef(ctx, headBlockRef, c.encStrat)
 		if err != nil {
 			return err
 		}
 
-		headBlockHeader, err := block.FollowBlockHeaderRef(ctx, headBlock.GetBlockHeaderRef(), c.encStrat)
+		headBlockHeader, err := block.FollowBlockHeaderRef(
+			ctx,
+			headBlock.GetBlockHeaderRef(),
+			c.encStrat,
+		)
 		if err != nil {
 			return err
 		}
@@ -602,7 +615,7 @@ func (c *Chain) manageStateOnce(ctx context.Context) error {
 			Info("head block updated")
 		c.lastBlock = headBlock
 		c.lastBlockHeader = headBlockHeader
-		c.lastBlockRef = segmentState.GetHeadBlock()
+		c.lastBlockRef = headBlockRef
 		c.lastHeadDigest = headDigest
 
 		if err := c.writeState(ctx); err != nil {

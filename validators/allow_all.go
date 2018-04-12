@@ -1,16 +1,18 @@
 package validators
 
 import (
+	"context"
 	"github.com/aperturerobotics/inca-go/block"
 )
 
-// AllowValidator allows all operations.
-type AllowValidator struct{}
+// AllowAll allows all operations.
+type AllowAll struct{}
 
 // ValidateBlock validates a proposed block.
-func (v *AllowValidator) ValidateBlock(
+func (v *AllowAll) ValidateBlock(
+	ctx *context.Context,
 	proposedBlk *block.Block,
 	parentBlk *block.Block,
-) error {
-	return nil
+) (bool, error) {
+	return false, nil
 }
