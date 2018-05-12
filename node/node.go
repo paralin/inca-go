@@ -55,14 +55,9 @@ func NewNode(
 	objStore *objstore.ObjectStore,
 	shell *api.Shell,
 	ch *chain.Chain,
-	config *Config,
+	privKey crypto.PrivKey,
 ) (*Node, error) {
 	le := logctx.GetLogEntry(ctx)
-	privKey, err := config.UnmarshalPrivKey()
-	if err != nil {
-		return nil, err
-	}
-
 	genesisRef := ch.GetGenesisRef()
 	nodeAddr, err := lpeer.IDFromPrivateKey(privKey)
 	if err != nil {
@@ -203,6 +198,11 @@ func (n *Node) writeState(ctx context.Context) error {
 // GetProcess returns the process.
 func (n *Node) GetProcess() goprocess.Process {
 	return n.proc
+}
+
+// GetPeerStore returns the peer store.
+func (n *Node) GetPeerStore() *peer.PeerStore {
+	return n.peerStore
 }
 
 // SendMessage submits a message to the node pubsub.

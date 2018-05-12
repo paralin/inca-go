@@ -6,6 +6,7 @@ import (
 	"os"
 	"sync"
 
+	// 	"github.com/aperturerobotics/inca-go/block"
 	"github.com/aperturerobotics/inca-go/chain"
 	"github.com/aperturerobotics/inca-go/logctx"
 	"github.com/aperturerobotics/inca-go/node"
@@ -31,16 +32,6 @@ func GetNode() (*node.Node, error) {
 	confPath := nodeConfigPath
 	if confPath == "" {
 		confPath = "node_config.json"
-	}
-
-	var validator validators.BuiltInValidator
-	if nodeValidatorType != "" {
-		nv, err := validators.GetBuiltInValidator(nodeValidatorType)
-		if err != nil {
-			return nil, err
-		}
-
-		validator = nv
 	}
 
 	le := logctx.GetLogEntry(rootContext)
@@ -71,11 +62,20 @@ func GetNode() (*node.Node, error) {
 	}
 
 	le.Debug("loading blockchain")
-	ch, err := chain.FromConfig(ctx, dbm, db, chainConf, validator, nil)
+	ch, err := chain.FromConfig(ctx, dbm, db, chainConf, nil)
 	if err != nil {
 		return nil, err
 	}
 	le.WithField("chain-id", ch.GetGenesis().GetChainId()).Info("blockchain loaded")
+
+	if nodeValidatorType != "" {
+		nv, err := validators.GetBuiltInValidator(nodeValidatorType, ch)
+		if err != nil {
+			return nil, err
+		}
+
+		ch.SetBlockValidator(nv)
+	}
 
 	nodeConf := &node.Config{}
 	confDat, err := ioutil.ReadFile(confPath)
@@ -111,7 +111,12 @@ func GetNode() (*node.Node, error) {
 		}
 	}
 
-	nod, err := node.NewNode(ctx, dbm, db, sh, ch, nodeConf)
+	nodPriv, err := nodeConf.UnmarshalPrivKey()
+	if err != nil {
+		return nil, err
+	}
+
+	nod, err := node.NewNode(ctx, dbm, db, sh, ch, nodPriv)
 	if err != nil {
 		return nil, err
 	}

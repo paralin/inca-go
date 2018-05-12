@@ -10,7 +10,7 @@ type AllowAll struct{}
 
 // ValidateBlock validates a proposed block.
 func (v *AllowAll) ValidateBlock(
-	ctx *context.Context,
+	ctx context.Context,
 	proposedBlk *block.Block,
 	parentBlk *block.Block,
 ) (bool, error) {

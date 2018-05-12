@@ -92,16 +92,6 @@ func main() {
 }
 
 func runCounterExample(c *cli.Context) error {
-	var validator validators.BuiltInValidator
-	if nodeValidatorType != "" {
-		nv, err := validators.GetBuiltInValidator(nodeValidatorType)
-		if err != nil {
-			return err
-		}
-
-		validator = nv
-	}
-
 	ctx := rootContext
 	le := logctx.GetLogEntry(ctx)
 
@@ -171,13 +161,13 @@ func runCounterExample(c *cli.Context) error {
 				objStore,
 				"counter-test-1",
 				nodePriv,
-				validator,
-				chainProposer,
+				nil,
 			)
 			mintCtxCancel()
 			if err != nil {
 				return err
 			}
+			nch.SetBlockProposer(chainProposer)
 
 			chainConf = nch.GetConfig()
 			chainConfStr, err := (&jsonpb.Marshaler{}).MarshalToString(chainConf)
@@ -202,14 +192,24 @@ func runCounterExample(c *cli.Context) error {
 
 	le.Info("loading blockchain")
 	proposer := &Proposer{}
-	ch, err := chain.FromConfig(ctx, dbm, objStore, chainConf, validator, proposer)
+	ch, err := chain.FromConfig(ctx, dbm, objStore, chainConf, nil)
 	if err != nil {
 		return err
 	}
+	ch.SetBlockProposer(proposer)
 	le.WithField("chain-id", ch.GetGenesis().GetChainId()).Info("blockchain loaded")
 
+	if nodeValidatorType != "" {
+		nv, err := validators.GetBuiltInValidator(nodeValidatorType, ch)
+		if err != nil {
+			return err
+		}
+
+		ch.SetBlockValidator(nv)
+	}
+
 	le.Info("starting node")
-	nod, err := node.NewNode(ctx, dbm, objStore, sh, ch, nodeConf)
+	nod, err := node.NewNode(ctx, dbm, objStore, sh, ch, nodePriv)
 	if err != nil {
 		return err
 	}

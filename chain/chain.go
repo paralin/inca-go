@@ -10,6 +10,7 @@ import (
 
 	"github.com/aperturerobotics/inca"
 	"github.com/aperturerobotics/inca-go/block"
+	"github.com/aperturerobotics/inca-go/chain/state"
 	"github.com/aperturerobotics/inca-go/encryption"
 	"github.com/aperturerobotics/inca-go/encryption/convergentimmutable"
 	"github.com/aperturerobotics/inca-go/encryption/impl"
@@ -56,7 +57,7 @@ type Chain struct {
 
 	stateSnapshotCtx       context.Context
 	stateSnapshotCtxCancel context.CancelFunc
-	lastStateSnapshot      *ChainStateSnapshot
+	lastStateSnapshot      *state.ChainStateSnapshot
 
 	stateSubs       sync.Map
 	lastHeadDigest  []byte
@@ -76,7 +77,6 @@ func NewChain(
 	chainID string,
 	validatorPriv crypto.PrivKey,
 	blockValidator block.Validator,
-	blockProposer block.Proposer,
 ) (*Chain, error) {
 	if chainID == "" {
 		return nil, errors.New("chain id must be set")
@@ -129,7 +129,6 @@ func NewChain(
 	chainConf := &inca.ChainConfig{
 		TimingConfig: &inca.TimingConfig{
 			MinProposeAfterBlock: 500,
-			MaxProposeAfterBlock: 10000,
 			RoundLength:          3000,
 		},
 		ValidatorSetRef: validatorSetStorageRef,
@@ -174,7 +173,6 @@ func NewChain(
 		le:      le,
 
 		blockValidator:      blockValidator,
-		blockProposer:       blockProposer,
 		recheckStateTrigger: make(chan struct{}, 1),
 	}
 	ch.SegmentStore = segment.NewSegmentStore(
@@ -254,7 +252,12 @@ func NewChain(
 		HeadBlock: firstBlockStorageRef,
 		TailBlock: firstBlockStorageRef,
 	}
-	if err := db.LocalStore.StoreLocal(ctx, firstSeg, &firstSegDigest, objstore.StoreParams{}); err != nil {
+	if err := db.LocalStore.StoreLocal(
+		ctx,
+		firstSeg,
+		&firstSegDigest,
+		objstore.StoreParams{},
+	); err != nil {
 		return nil, err
 	}
 
@@ -298,7 +301,6 @@ func FromConfig(
 	db *objstore.ObjectStore,
 	conf *ichain.Config,
 	blockValidator block.Validator,
-	blockProposer block.Proposer,
 ) (*Chain, error) {
 	le := logctx.GetLogEntry(ctx)
 	if objstore.GetObjStore(ctx) == nil {
@@ -331,7 +333,6 @@ func FromConfig(
 		le:                  le,
 		recheckStateTrigger: make(chan struct{}, 1),
 		blockValidator:      blockValidator,
-		blockProposer:       blockProposer,
 	}
 	ch.SegmentStore = segment.NewSegmentStore(
 		ctx,
@@ -376,9 +377,19 @@ func (c *Chain) GetBlockValidator() block.Validator {
 	return c.blockValidator
 }
 
-// GetBlockProposer returns the block proposer.
+// SetBlockValidator updates the block validator.
+func (c *Chain) SetBlockValidator(bv block.Validator) {
+	c.blockValidator = bv
+}
+
+// GetBlockProposer returns the block proposer, if set.
 func (c *Chain) GetBlockProposer() block.Proposer {
 	return c.blockProposer
+}
+
+// SetBlockProposer updates the block proposer.
+func (c *Chain) SetBlockProposer(bp block.Proposer) {
+	c.blockProposer = bp
 }
 
 // GetEncryptionStrategy returns the encryption strategy for this chain.
@@ -653,12 +664,11 @@ func (c *Chain) computeEmitSnapshot(ctx context.Context) error {
 
 	chainConfig := &inca.ChainConfig{}
 	{
-		encConf := c.encStrat.GetBlockEncryptionConfigWithDigest(
-			c.lastBlockHeader.
-				GetNextChainConfigRef().
-				GetObjectDigest(),
+		subCtx := c.GetEncryptContextWithDigest(
+			ctx,
+			c.lastBlockHeader.GetNextChainConfigRef().GetObjectDigest(),
+			chainConfig,
 		)
-		subCtx := pbobject.WithEncryptionConf(ctx, &encConf)
 		err := c.lastBlockHeader.
 			GetNextChainConfigRef().
 			FollowRef(subCtx, nil, chainConfig)
@@ -702,10 +712,11 @@ func (c *Chain) computeEmitSnapshot(ctx context.Context) error {
 	// Compute current proposer
 	validatorSet := &inca.ValidatorSet{}
 	{
-		encConf := c.encStrat.GetBlockEncryptionConfigWithDigest(
+		subCtx := c.GetEncryptContextWithDigest(
+			ctx,
 			chainConfig.GetValidatorSetRef().GetObjectDigest(),
+			validatorSet,
 		)
-		subCtx := pbobject.WithEncryptionConf(ctx, &encConf)
 		err := chainConfig.GetValidatorSetRef().FollowRef(subCtx, nil, validatorSet)
 		if err != nil {
 			return err
@@ -719,7 +730,7 @@ func (c *Chain) computeEmitSnapshot(ctx context.Context) error {
 		currRoundInfo.Round,
 	)
 
-	currentSnap := &ChainStateSnapshot{
+	currentSnap := &state.ChainStateSnapshot{
 		BlockRoundInfo:     currRoundInfo,
 		RoundStartTime:     roundStartTime,
 		RoundEndTime:       roundEndTime,
@@ -752,6 +763,59 @@ func (c *Chain) computeEmitSnapshot(ctx context.Context) error {
 
 	c.emitNextChainState(currentSnap)
 	return nil
+}
+
+// GetEncryptContextWithDigest checks the type of obj an returns the encryption strategy ctx.
+func (c *Chain) GetEncryptContextWithDigest(
+	ctx context.Context,
+	digest []byte,
+	obj interface{},
+) context.Context {
+	var encConf pbobject.EncryptionConfig
+	switch obj.(type) {
+	case *inca.ValidatorSet:
+		encConf = c.
+			GetEncryptionStrategy().
+			GetBlockEncryptionConfigWithDigest(digest)
+	case *inca.ChainConfig:
+		encConf = c.
+			GetEncryptionStrategy().
+			GetBlockEncryptionConfigWithDigest(digest)
+	case *inca.BlockHeader:
+		encConf = c.
+			GetEncryptionStrategy().
+			GetBlockEncryptionConfigWithDigest(digest)
+	default:
+		return nil
+	}
+
+	return pbobject.WithEncryptionConf(ctx, &encConf)
+}
+
+// GetEncryptContext checks the type of obj an returns the encryption strategy ctx.
+func (c *Chain) GetEncryptContext(
+	ctx context.Context,
+	obj interface{},
+) context.Context {
+	var encConf pbobject.EncryptionConfig
+	switch obj.(type) {
+	case *inca.ValidatorSet:
+		encConf = c.
+			GetEncryptionStrategy().
+			GetBlockEncryptionConfig()
+	case *inca.ChainConfig:
+		encConf = c.
+			GetEncryptionStrategy().
+			GetBlockEncryptionConfig()
+	case *inca.BlockHeader:
+		encConf = c.
+			GetEncryptionStrategy().
+			GetBlockEncryptionConfig()
+	default:
+		return nil
+	}
+
+	return pbobject.WithEncryptionConf(ctx, &encConf)
 }
 
 // triggerStateRecheck triggers a state recheck without blocking.

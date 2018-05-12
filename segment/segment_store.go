@@ -26,7 +26,6 @@ type SegmentStore struct {
 	le              *logrus.Entry
 	segmentMap      sync.Map // map[string]*Segment (by id)
 	dbm             db.Db
-	segmentDbm      db.Db
 	objStore        *objstore.ObjectStore
 	segmentQueue    *SegmentQueue
 	segmentNotifyCh <-chan *Segment
@@ -46,7 +45,6 @@ func NewSegmentStore(
 	ss := &SegmentStore{
 		ctx:             ctx,
 		dbm:             dbm,
-		segmentDbm:      db.WithPrefix(dbm, []byte("/segments")),
 		objStore:        objStore,
 		le:              le,
 		segmentNotifyCh: segmentNotifyCh,
@@ -108,7 +106,7 @@ func (s *SegmentStore) rewindOnce(
 
 // dbListSegments lists segment IDs in the database.
 func (s *SegmentStore) dbListSegments(ctx context.Context) ([]string, error) {
-	keys, err := s.segmentDbm.List(ctx, []byte("/"))
+	keys, err := s.dbm.List(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -133,7 +131,7 @@ func (s *SegmentStore) GetSegmentById(ctx context.Context, id string) (*Segment,
 	seg := &Segment{
 		ctx: ctx,
 		db:  s.objStore,
-		dbm: s.segmentDbm,
+		dbm: s.dbm,
 		le:  le,
 	}
 
@@ -168,7 +166,7 @@ func (s *SegmentStore) NewSegment(ctx context.Context, blk *block.Block, blkRef 
 	seg := &Segment{
 		ctx: ctx,
 		db:  s.objStore,
-		dbm: db.WithPrefix(s.dbm, []byte("/segments")),
+		dbm: s.dbm,
 		le:  le,
 	}
 

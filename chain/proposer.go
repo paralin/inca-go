@@ -7,13 +7,12 @@ import (
 
 	"github.com/aperturerobotics/inca"
 	"github.com/aperturerobotics/inca-go/block"
+	"github.com/aperturerobotics/inca-go/chain/state"
 	"github.com/aperturerobotics/inca-go/logctx"
 	"github.com/aperturerobotics/inca-go/peer"
 	ichain "github.com/aperturerobotics/inca/chain"
-
 	"github.com/aperturerobotics/objstore"
 	"github.com/aperturerobotics/objstore/db"
-
 	"github.com/aperturerobotics/pbobject"
 	"github.com/aperturerobotics/storageref"
 	"github.com/aperturerobotics/timestamp"
@@ -38,7 +37,7 @@ type Proposer struct {
 	pubKeyBytes []byte
 	objStore    *objstore.ObjectStore
 
-	msgSender NodeMessageSender
+	msgSender Node
 	peerStore *peer.PeerStore
 }
 
@@ -48,7 +47,7 @@ func NewProposer(
 	privKey crypto.PrivKey,
 	dbm db.Db,
 	ch *Chain,
-	sender NodeMessageSender,
+	sender Node,
 	peerStore *peer.PeerStore,
 ) (*Proposer, error) {
 	ch.GetBlockValidator()
@@ -76,6 +75,7 @@ func NewProposer(
 	if err != nil {
 		return nil, err
 	}
+
 	if err := p.readState(ctx); err != nil {
 		return nil, err
 	}
@@ -118,7 +118,7 @@ func (p *Proposer) writeState(ctx context.Context) error {
 }
 
 // makeProposal makes a proposal for the given state.
-func (p *Proposer) makeProposal(ctx context.Context, state *ChainStateSnapshot) (*storageref.StorageRef, *inca.BlockHeader, error) {
+func (p *Proposer) makeProposal(ctx context.Context, state *state.ChainStateSnapshot) (*storageref.StorageRef, *inca.BlockHeader, error) {
 	nowTs := timestamp.Now()
 	blockProposer := p.ch.GetBlockProposer()
 
@@ -138,10 +138,11 @@ func (p *Proposer) makeProposal(ctx context.Context, state *ChainStateSnapshot) 
 		return nil, nil, err
 	}
 
-	proposedState, err := blockProposer.ProposeBlock(ctx, lastBlock)
+	proposedState, err := blockProposer.ProposeBlock(ctx, lastBlock, state)
 	if err != nil {
 		return nil, nil, err
 	}
+
 	if proposedState == nil {
 		return nil, nil, nil
 	}
@@ -208,7 +209,7 @@ func (p *Proposer) ManageProposer(ctx context.Context) error {
 
 StateLoop:
 	for {
-		var nextState ChainStateSnapshot
+		var nextState state.ChainStateSnapshot
 		select {
 		case <-ctx.Done():
 			return ctx.Err()

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/aperturerobotics/inca"
+	"github.com/aperturerobotics/inca-go/chain/state"
 	"github.com/aperturerobotics/inca-go/logctx"
 	"github.com/aperturerobotics/inca-go/peer"
 	ichain "github.com/aperturerobotics/inca/chain"
@@ -35,7 +36,7 @@ type Validator struct {
 	pubKeyBytes []byte
 	objStore    *objstore.ObjectStore
 
-	msgSender NodeMessageSender
+	msgSender Node
 	peerStore *peer.PeerStore
 }
 
@@ -45,7 +46,7 @@ func NewValidator(
 	privKey crypto.PrivKey,
 	dbm db.Db,
 	ch *Chain,
-	sender NodeMessageSender,
+	sender Node,
 	peerStore *peer.PeerStore,
 ) (*Validator, error) {
 	le := logctx.GetLogEntry(ctx).WithField("c", "validator")
@@ -110,7 +111,7 @@ func (p *Validator) writeState(ctx context.Context) error {
 }
 
 // makeVote makes a vote for the given state.
-func (p *Validator) makeVote(ctx context.Context, state *ChainStateSnapshot) (*storageref.StorageRef, error) {
+func (p *Validator) makeVote(ctx context.Context, state *state.ChainStateSnapshot) (*storageref.StorageRef, error) {
 	proposer := state.CurrentProposer
 	_, pubKey, err := proposer.ParsePeerID()
 	if err != nil {
@@ -140,7 +141,9 @@ func (p *Validator) makeVote(ctx context.Context, state *ChainStateSnapshot) (*s
 
 		vote := &inca.Vote{}
 		voteRef := peerMsg.GetInnerRef()
-		encConf := p.ch.GetEncryptionStrategy().GetBlockEncryptionConfigWithDigest(voteRef.GetObjectDigest())
+		encConf := p.ch.
+			GetEncryptionStrategy().
+			GetBlockEncryptionConfigWithDigest(voteRef.GetObjectDigest())
 		encCtx := pbobject.WithEncryptionConf(ctx, &encConf)
 		if err := voteRef.FollowRef(encCtx, nil, vote); err != nil {
 			return nil, err
@@ -148,7 +151,9 @@ func (p *Validator) makeVote(ctx context.Context, state *ChainStateSnapshot) (*s
 
 		blockHeaderRef = vote.GetBlockHeaderRef()
 		blockHeader := &inca.BlockHeader{}
-		encConf = p.ch.GetEncryptionStrategy().GetBlockEncryptionConfigWithDigest(blockHeaderRef.GetObjectDigest())
+		encConf = p.ch.
+			GetEncryptionStrategy().
+			GetBlockEncryptionConfigWithDigest(blockHeaderRef.GetObjectDigest())
 		encCtx = pbobject.WithEncryptionConf(ctx, &encConf)
 		if err := blockHeaderRef.FollowRef(encCtx, nil, blockHeader); err != nil {
 			return nil, err
@@ -156,7 +161,9 @@ func (p *Validator) makeVote(ctx context.Context, state *ChainStateSnapshot) (*s
 
 		if blockHeader.GetRoundInfo().GetHeight() != state.BlockRoundInfo.GetHeight() ||
 			blockHeader.GetRoundInfo().GetRound() != state.BlockRoundInfo.GetRound() {
-			p.le.WithField("round", blockHeader.GetRoundInfo().String()).Warn("skipping vote for wrong round")
+			p.le.
+				WithField("round", blockHeader.GetRoundInfo().String()).
+				Warn("skipping vote for wrong round")
 			continue
 		}
 
@@ -200,7 +207,7 @@ func (p *Validator) ManageValidator(ctx context.Context) error {
 	defer chStateCancel()
 
 	for {
-		var nextState ChainStateSnapshot
+		var nextState state.ChainStateSnapshot
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -214,7 +221,7 @@ func (p *Validator) ManageValidator(ctx context.Context) error {
 }
 
 // processStateSnapshot processes a state.
-func (p *Validator) processStateSnapshot(ctx context.Context, nextState *ChainStateSnapshot) error {
+func (p *Validator) processStateSnapshot(ctx context.Context, nextState *state.ChainStateSnapshot) error {
 	if nextState.CurrentProposer == nil {
 		return nil
 	}

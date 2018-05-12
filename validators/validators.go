@@ -9,8 +9,8 @@ import (
 // builtInValidators contains the sample built-in validators.
 var builtInValidators = map[string]func(*chain.Chain) block.Validator{
 	"none":  nil,
-	"allow": func(*chain.Chain) { return &AllowAll{} },
-	"deny":  func(*chain.Chain) { return &DenyAll{} },
+	"allow": func(*chain.Chain) block.Validator { return &AllowAll{} },
+	"deny":  func(*chain.Chain) block.Validator { return &DenyAll{} },
 	"immutable-validator-set": NewImmutableValidatorSet,
 }
 
