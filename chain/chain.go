@@ -43,7 +43,6 @@ var genesisKey = "/genesis"
 
 // Chain is an instance of a blockchain.
 type Chain struct {
-	*segment.SegmentStore
 	ctx                 context.Context
 	db                  *objstore.ObjectStore
 	dbm                 idb.Db
@@ -64,6 +63,7 @@ type Chain struct {
 	lastBlock       *inca.Block
 	lastBlockHeader *inca.BlockHeader
 	lastBlockRef    *storageref.StorageRef
+	segStore        *segment.SegmentStore
 
 	blockValidator block.Validator
 	blockProposer  block.Proposer
@@ -175,7 +175,7 @@ func NewChain(
 		blockValidator:      blockValidator,
 		recheckStateTrigger: make(chan struct{}, 1),
 	}
-	ch.SegmentStore = segment.NewSegmentStore(
+	ch.segStore = segment.NewSegmentStore(
 		ctx,
 		idb.WithPrefix(
 			dbm,
@@ -272,7 +272,7 @@ func NewChain(
 		return nil, err
 	}
 
-	seg, err := ch.SegmentStore.NewSegment(ctx, firstBlk, firstBlockStorageRef)
+	seg, err := ch.segStore.NewSegment(ctx, firstBlk, firstBlockStorageRef)
 	if err != nil {
 		return nil, err
 	}
@@ -334,7 +334,7 @@ func FromConfig(
 		recheckStateTrigger: make(chan struct{}, 1),
 		blockValidator:      blockValidator,
 	}
-	ch.SegmentStore = segment.NewSegmentStore(
+	ch.segStore = segment.NewSegmentStore(
 		ctx,
 		idb.WithPrefix(dbm, []byte(fmt.Sprintf("/chain/%s/segments", ch.genesis.GetChainId()))),
 		db,
@@ -420,7 +420,13 @@ func (c *Chain) HandleBlockCommit(
 	ctx := c.ctx
 	encStrat := c.GetEncryptionStrategy()
 	blkDbm := c.GetBlockDbm()
-	blkObj, err := block.GetBlock(ctx, encStrat, c.GetBlockValidator(), blkDbm, blkRef)
+	blkObj, err := block.GetBlock(
+		ctx,
+		encStrat,
+		c.GetBlockValidator(),
+		blkDbm,
+		blkRef,
+	)
 	if err != nil {
 		return err
 	}
@@ -448,7 +454,7 @@ func (c *Chain) HandleBlockCommit(
 	// If the parent is identified...
 	blkParentSegmentID := blkParentObj.GetSegmentId()
 	if blkParentSegmentID != "" {
-		blkParentSeg, err := c.GetSegmentById(ctx, blkParentSegmentID)
+		blkParentSeg, err := c.segStore.GetSegmentById(ctx, blkParentSegmentID)
 		if err != nil {
 			return err
 		}
@@ -468,7 +474,7 @@ func (c *Chain) HandleBlockCommit(
 	}
 
 	// Create a new segment
-	seg, err := c.NewSegment(ctx, blkObj, blkRef)
+	seg, err := c.segStore.NewSegment(ctx, blkObj, blkRef)
 	if err != nil {
 		return err
 	}
@@ -568,6 +574,7 @@ func (c *Chain) manageState() {
 	}
 }
 
+// manageStateOnce manages the state for one round.
 func (c *Chain) manageStateOnce(ctx context.Context) error {
 	// Evaluate current state
 	stateSegmentID := c.state.GetStateSegment()
@@ -575,14 +582,14 @@ func (c *Chain) manageStateOnce(ctx context.Context) error {
 		return errors.New("no current state segment")
 	}
 
-	seg, err := c.GetSegmentById(ctx, stateSegmentID)
+	seg, err := c.segStore.GetSegmentById(ctx, stateSegmentID)
 	if err != nil {
 		return err
 	}
 
 	// Check if we should fast-forward the segment.
 	if nextSegmentID := seg.GetSegmentNext(); nextSegmentID != "" {
-		nextSegment, err := c.GetSegmentById(ctx, nextSegmentID)
+		nextSegment, err := c.segStore.GetSegmentById(ctx, nextSegmentID)
 		if err != nil {
 			return err
 		}
@@ -760,7 +767,6 @@ func (c *Chain) computeEmitSnapshot(ctx context.Context) error {
 	}
 
 	// Load blocks in as necessary.
-
 	c.emitNextChainState(currentSnap)
 	return nil
 }

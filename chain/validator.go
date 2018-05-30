@@ -188,7 +188,12 @@ func (p *Validator) makeVote(ctx context.Context, state *state.ChainStateSnapsho
 			voteStorageRef = sr
 		}
 
-		err := p.msgSender.SendMessage(p.ctx, inca.NodeMessageType_NodeMessageType_VOTE, voteStorageRef)
+		err := p.msgSender.SendMessage(
+			p.ctx,
+			inca.NodeMessageType_NodeMessageType_VOTE,
+			0,
+			voteStorageRef,
+		)
 		if err != nil {
 			return nil, err
 		}

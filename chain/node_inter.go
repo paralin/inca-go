@@ -14,6 +14,7 @@ type Node interface {
 	SendMessage(
 		ctx context.Context,
 		msgType inca.NodeMessageType,
+		appMsgType uint32,
 		msgInnerRef *storageref.StorageRef,
 	) error
 	// GetPeerStore returns the peer store from the node.

@@ -187,6 +187,7 @@ func (p *Proposer) makeProposal(ctx context.Context, state *state.ChainStateSnap
 	err = p.msgSender.SendMessage(
 		p.ctx,
 		inca.NodeMessageType_NodeMessageType_VOTE,
+		0,
 		voteStorageRef,
 	)
 	return blockHeaderRef, blockHeader, err
@@ -325,7 +326,12 @@ StateLoop:
 			blockStorageRef = sr
 		}
 
-		if err := p.msgSender.SendMessage(stateCtx, inca.NodeMessageType_NodeMessageType_BLOCK_COMMIT, blockStorageRef); err != nil {
+		if err := p.msgSender.SendMessage(
+			stateCtx,
+			inca.NodeMessageType_NodeMessageType_BLOCK_COMMIT,
+			0,
+			blockStorageRef,
+		); err != nil {
 			p.le.WithError(err).Error("unable to send block commit")
 		}
 

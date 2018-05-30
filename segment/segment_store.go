@@ -42,7 +42,7 @@ func NewSegmentStore(
 ) *SegmentStore {
 	le := logctx.GetLogEntry(ctx)
 	segmentNotifyCh := make(chan *Segment, 5)
-	ss := &SegmentStore{
+	return &SegmentStore{
 		ctx:             ctx,
 		dbm:             dbm,
 		objStore:        objStore,
@@ -50,30 +50,10 @@ func NewSegmentStore(
 		segmentNotifyCh: segmentNotifyCh,
 		segmentQueue:    NewSegmentQueue(segmentNotifyCh),
 	}
-	go ss.manageSegmentStore(ctx, encStrat, blockValidator, blockDbm)
-	return ss
 }
 
-// manageSegmentStore manages the segment store.
-func (s *SegmentStore) manageSegmentStore(
-	ctx context.Context,
-	encStrat encryption.Strategy,
-	blockValidator block.Validator,
-	blockDbm db.Db,
-) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-s.segmentNotifyCh:
-		}
-
-		s.rewindOnce(ctx, encStrat, blockValidator, blockDbm)
-	}
-}
-
-// rewindOnce rewinds the highest priority segment by one.
-func (s *SegmentStore) rewindOnce(
+// RewindOnce rewinds the highest priority segment by one.
+func (s *SegmentStore) RewindOnce(
 	ctx context.Context,
 	encStrat encryption.Strategy,
 	blockValidator block.Validator,
@@ -159,7 +139,11 @@ func (s *SegmentStore) GetDigestKey(hash []byte) []byte {
 }
 
 // NewSegment builds a new segment for a block.
-func (s *SegmentStore) NewSegment(ctx context.Context, blk *block.Block, blkRef *storageref.StorageRef) (*Segment, error) {
+func (s *SegmentStore) NewSegment(
+	ctx context.Context,
+	blk *block.Block,
+	blkRef *storageref.StorageRef,
+) (*Segment, error) {
 	uid, _ := uuid.NewV4()
 	segmentID := uid.String()
 	le := logctx.GetLogEntry(ctx)

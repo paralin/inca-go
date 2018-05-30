@@ -209,13 +209,17 @@ func (n *Node) GetPeerStore() *peer.PeerStore {
 func (n *Node) SendMessage(
 	ctx context.Context,
 	msgType inca.NodeMessageType,
+	appMsgType uint32,
 	msgInnerRef *storageref.StorageRef,
 ) error {
 	// Build the NodeMessage object
+	ts := timestamp.Now()
 	nm := &inca.NodeMessage{
-		MessageType: msgType,
-		GenesisRef:  n.chain.GetGenesisRef(),
-		InnerRef:    msgInnerRef,
+		MessageType:    msgType,
+		GenesisRef:     n.chain.GetGenesisRef(),
+		InnerRef:       msgInnerRef,
+		Timestamp:      &ts,
+		AppMessageType: appMsgType,
 	}
 
 	select {

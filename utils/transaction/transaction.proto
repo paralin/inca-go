@@ -1,0 +1,18 @@
+syntax = "proto3";
+package transaction;
+
+import "github.com/aperturerobotics/storageref/storageref.proto";
+
+// BlockState is the in-band data stored in the BlockHeader app state pointer.
+message BlockState {
+  // ApplicationStateRef is the reference to the application state.
+  storageref.StorageRef application_state_ref = 1;
+  // TransactionSetRef is the reference to the transaction set.
+  storageref.StorageRef transaction_set_ref = 2;
+}
+
+// TransactionSet contains an ordered set of transactions applied to the state.
+message TransactionSet {
+  // TransactionRefs contains NodeMessage references in the order they were applied.
+  repeated storageref.StorageRef transaction_refs = 1;
+}
