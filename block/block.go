@@ -40,18 +40,22 @@ func FollowBlockRef(
 	blk := &inca.Block{}
 	encConf := encStrat.GetBlockEncryptionConfigWithDigest(ref.GetObjectDigest())
 	subCtx := pbobject.WithEncryptionConf(ctx, &encConf)
-	if err := ref.FollowRef(subCtx, ref.GetObjectDigest(), blk); err != nil {
+	if err := ref.FollowRef(subCtx, ref.GetObjectDigest(), blk, nil); err != nil {
 		return nil, err
 	}
 	return blk, nil
 }
 
 // FollowBlockHeaderRef follows a reference to a BlockHeader object.
-func FollowBlockHeaderRef(ctx context.Context, ref *storageref.StorageRef, encStrat encryption.Strategy) (*inca.BlockHeader, error) {
+func FollowBlockHeaderRef(
+	ctx context.Context,
+	ref *storageref.StorageRef,
+	encStrat encryption.Strategy,
+) (*inca.BlockHeader, error) {
 	blk := &inca.BlockHeader{}
 	encConf := encStrat.GetBlockEncryptionConfigWithDigest(ref.GetObjectDigest())
 	subCtx := pbobject.WithEncryptionConf(ctx, &encConf)
-	if err := ref.FollowRef(subCtx, ref.GetObjectDigest(), blk); err != nil {
+	if err := ref.FollowRef(subCtx, ref.GetObjectDigest(), blk, nil); err != nil {
 		return nil, err
 	}
 	return blk, nil
@@ -142,7 +146,7 @@ func (b *Block) fetchChainConfig(ctx context.Context) (*inca.ChainConfig, error)
 	chainConfRef := b.header.GetChainConfigRef()
 	encConf := b.encStrat.GetBlockEncryptionConfigWithDigest(chainConfRef.GetObjectDigest())
 	subCtx := pbobject.WithEncryptionConf(ctx, &encConf)
-	if err := chainConfRef.FollowRef(subCtx, nil, chainConf); err != nil {
+	if err := chainConfRef.FollowRef(subCtx, nil, chainConf, nil); err != nil {
 		return nil, err
 	}
 
@@ -194,7 +198,7 @@ func (b *Block) ValidateChild(ctx context.Context, child *Block) (bool, error) {
 	{
 		encConf := b.encStrat.GetBlockEncryptionConfigWithDigest(chainConf.GetValidatorSetRef().GetObjectDigest())
 		subCtx := pbobject.WithEncryptionConf(ctx, &encConf)
-		if err := chainConf.GetValidatorSetRef().FollowRef(subCtx, nil, valSet); err != nil {
+		if err := chainConf.GetValidatorSetRef().FollowRef(subCtx, nil, valSet, nil); err != nil {
 			return false, err
 		}
 	}

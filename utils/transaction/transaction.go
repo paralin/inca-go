@@ -8,6 +8,7 @@ import (
 
 	"github.com/aperturerobotics/inca"
 	"github.com/aperturerobotics/pbobject"
+	"github.com/aperturerobotics/storageref"
 	"github.com/aperturerobotics/timestamp"
 	"github.com/libp2p/go-libp2p-crypto"
 	"github.com/pkg/errors"
@@ -16,6 +17,9 @@ import (
 // Transaction contains data about a transaction.
 type Transaction struct {
 	id string
+
+	nodeMessage *inca.NodeMessage
+	storageRef  *storageref.StorageRef
 }
 
 // GetObjectTypeID returns the object type string, used to identify types.
@@ -29,6 +33,21 @@ var TransactionAppMessageID = (&Transaction{}).GetObjectTypeID().GetCrc32()
 // GetID returns the transaction ID.
 func (t *Transaction) GetID() string {
 	return t.id
+}
+
+// GetNodeMessage returns the NodeMessage used to build this transaction if any.
+func (t *Transaction) GetNodeMessage() *inca.NodeMessage {
+	return t.nodeMessage
+}
+
+// GetStorageRef returns the storage ref if set by SetStorageRef.
+func (t *Transaction) GetStorageRef() *storageref.StorageRef {
+	return t.storageRef
+}
+
+// SetStorageRef sets the storage ref.
+func (t *Transaction) SetStorageRef(storageRef *storageref.StorageRef) {
+	t.storageRef = storageRef
 }
 
 // FromNodeMessage loads a transaction from a node message object wrapper and message.
@@ -61,9 +80,11 @@ func FromNodeMessage(
 		return nil, errors.New("expected timestamped nodemessage for transaction")
 	}
 
-	sig := obj.GetSignatures()[0]
-	if err := sig.MatchesPublicKey(nodeKey); err != nil {
-		return nil, err
+	if nodeKey != nil {
+		sig := obj.GetSignatures()[0]
+		if err := sig.MatchesPublicKey(nodeKey); err != nil {
+			return nil, err
+		}
 	}
 
 	tid, err := ComputeTxID(nodeMessage.GetTimestamp(), nodeKey)
@@ -71,7 +92,7 @@ func FromNodeMessage(
 		return nil, err
 	}
 
-	return &Transaction{id: tid}, nil
+	return &Transaction{id: tid, nodeMessage: nodeMessage}, nil
 }
 
 // ComputeTxID computes a transaction ID from a timestamp and node key.

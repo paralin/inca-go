@@ -319,7 +319,7 @@ func FromConfig(
 	encConfCtx := pbobject.WithEncryptionConf(ctx, &encConf)
 
 	genObj := &inca.Genesis{}
-	if err := conf.GetGenesisRef().FollowRef(encConfCtx, nil, genObj); err != nil {
+	if err := conf.GetGenesisRef().FollowRef(encConfCtx, nil, genObj, nil); err != nil {
 		return nil, errors.WithMessage(err, "cannot follow genesis reference")
 	}
 
@@ -678,7 +678,7 @@ func (c *Chain) computeEmitSnapshot(ctx context.Context) error {
 		)
 		err := c.lastBlockHeader.
 			GetNextChainConfigRef().
-			FollowRef(subCtx, nil, chainConfig)
+			FollowRef(subCtx, nil, chainConfig, nil)
 		if err != nil {
 			return err
 		}
@@ -724,7 +724,7 @@ func (c *Chain) computeEmitSnapshot(ctx context.Context) error {
 			chainConfig.GetValidatorSetRef().GetObjectDigest(),
 			validatorSet,
 		)
-		err := chainConfig.GetValidatorSetRef().FollowRef(subCtx, nil, validatorSet)
+		err := chainConfig.GetValidatorSetRef().FollowRef(subCtx, nil, validatorSet, nil)
 		if err != nil {
 			return err
 		}

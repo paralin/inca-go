@@ -358,7 +358,7 @@ func (p *Proposer) waitForValidatorVote(ctx context.Context, pr *peer.Peer, bloc
 			innerRef := msg.GetInnerRef()
 			encConf := p.ch.GetEncryptionStrategy().GetBlockEncryptionConfigWithDigest(innerRef.GetObjectDigest())
 			subCtx := pbobject.WithEncryptionConf(ctx, &encConf)
-			if err := innerRef.FollowRef(subCtx, innerRef.GetObjectDigest(), vote); err != nil {
+			if err := innerRef.FollowRef(subCtx, innerRef.GetObjectDigest(), vote, nil); err != nil {
 				le.WithError(err).Warn("unable to follow inner message ref")
 				continue
 			}

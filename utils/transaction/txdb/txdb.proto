@@ -1,0 +1,10 @@
+syntax = "proto3";
+package txdb;
+
+import "github.com/aperturerobotics/storageref/storageref.proto";
+
+// TransactionInfo attaches information to a transaction.
+message TransactionInfo {
+  // NodeMessageRef is the reference to the inca.NodeMessage containing the tx.
+  storageref.StorageRef node_message_ref = 1;
+}

@@ -127,7 +127,7 @@ func (n *Node) readGenesisState(ctx context.Context) error {
 		genEncConf := encStrat.GetGenesisEncryptionConfigWithDigest(genRef.GetObjectDigest())
 		genCtx := pbobject.WithEncryptionConf(ctx, &genEncConf)
 
-		if err := genRef.FollowRef(genCtx, nil, gen); err != nil {
+		if err := genRef.FollowRef(genCtx, nil, gen, nil); err != nil {
 			return err
 		}
 
@@ -141,7 +141,7 @@ func (n *Node) readGenesisState(ctx context.Context) error {
 		confRef := gen.GetInitChainConfigRef()
 		encConf := encStrat.GetBlockEncryptionConfigWithDigest(confRef.GetObjectDigest())
 		subCtx := pbobject.WithEncryptionConf(ctx, &encConf)
-		if err := confRef.FollowRef(subCtx, nil, initChainConfig); err != nil {
+		if err := confRef.FollowRef(subCtx, nil, initChainConfig, nil); err != nil {
 			return err
 		}
 	}
@@ -152,7 +152,7 @@ func (n *Node) readGenesisState(ctx context.Context) error {
 		validatorSetRef := initChainConfig.GetValidatorSetRef()
 		encConf := encStrat.GetBlockEncryptionConfigWithDigest(validatorSetRef.GetObjectDigest())
 		subCtx := pbobject.WithEncryptionConf(ctx, &encConf)
-		if err := validatorSetRef.FollowRef(subCtx, nil, initValidatorSet); err != nil {
+		if err := validatorSetRef.FollowRef(subCtx, nil, initValidatorSet, nil); err != nil {
 			return err
 		}
 	}

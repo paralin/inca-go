@@ -17,7 +17,7 @@ func (b *Block) GetState(ctx context.Context) (*State, error) {
 
 	stateRef := b.GetStateRef()
 	if !stateRef.IsEmpty() {
-		if err := stateRef.FollowRef(ctx, nil, blockState); err != nil {
+		if err := stateRef.FollowRef(ctx, nil, blockState, nil); err != nil {
 			return nil, err
 		}
 	}

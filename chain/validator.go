@@ -145,7 +145,7 @@ func (p *Validator) makeVote(ctx context.Context, state *state.ChainStateSnapsho
 			GetEncryptionStrategy().
 			GetBlockEncryptionConfigWithDigest(voteRef.GetObjectDigest())
 		encCtx := pbobject.WithEncryptionConf(ctx, &encConf)
-		if err := voteRef.FollowRef(encCtx, nil, vote); err != nil {
+		if err := voteRef.FollowRef(encCtx, nil, vote, nil); err != nil {
 			return nil, err
 		}
 
@@ -155,7 +155,7 @@ func (p *Validator) makeVote(ctx context.Context, state *state.ChainStateSnapsho
 			GetEncryptionStrategy().
 			GetBlockEncryptionConfigWithDigest(blockHeaderRef.GetObjectDigest())
 		encCtx = pbobject.WithEncryptionConf(ctx, &encConf)
-		if err := blockHeaderRef.FollowRef(encCtx, nil, blockHeader); err != nil {
+		if err := blockHeaderRef.FollowRef(encCtx, nil, blockHeader, nil); err != nil {
 			return nil, err
 		}
 

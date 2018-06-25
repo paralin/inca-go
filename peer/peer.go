@@ -115,7 +115,7 @@ func (p *Peer) processIncomingPubsubMessage(pubsubMsg *inca.ChainPubsubMessage) 
 	subCtx := pbobject.WithEncryptionConf(p.ctx, &encConf)
 
 	nm := &inca.NodeMessage{}
-	if err := msgRef.FollowRef(subCtx, nil, nm); err != nil {
+	if err := msgRef.FollowRef(subCtx, nil, nm, nil); err != nil {
 		return err
 	}
 
