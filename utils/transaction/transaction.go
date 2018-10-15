@@ -27,6 +27,16 @@ func (t *Transaction) GetObjectTypeID() *pbobject.ObjectTypeID {
 	return pbobject.NewObjectTypeID("/inca/util/transaction")
 }
 
+// GetObjectTypeID returns the object type string, used to identify types.
+func (t *TransactionSet) GetObjectTypeID() *pbobject.ObjectTypeID {
+	return pbobject.NewObjectTypeID("/inca/util/transaction/set")
+}
+
+// GetObjectTypeID returns the object type string, used to identify types.
+func (s *BlockState) GetObjectTypeID() *pbobject.ObjectTypeID {
+	return pbobject.NewObjectTypeID("/inca/util/transaction/block-state")
+}
+
 // TransactionAppMessageID is the identifier for the app message for a transaction.
 var TransactionAppMessageID = (&Transaction{}).GetObjectTypeID().GetCrc32()
 

@@ -117,6 +117,46 @@ func NewNode(
 	return n, nil
 }
 
+// GetProcess returns the process.
+func (n *Node) GetProcess() goprocess.Process {
+	return n.proc
+}
+
+// GetPeerStore returns the peer store.
+func (n *Node) GetPeerStore() *peer.PeerStore {
+	return n.peerStore
+}
+
+// GetChain returns the chain object.
+func (n *Node) GetChain() *chain.Chain {
+	return n.chain
+}
+
+// SendMessage submits a message to the node pubsub.
+func (n *Node) SendMessage(
+	ctx context.Context,
+	msgType inca.NodeMessageType,
+	appMsgType uint32,
+	msgInnerRef *storageref.StorageRef,
+) error {
+	// Build the NodeMessage object
+	ts := timestamp.Now()
+	nm := &inca.NodeMessage{
+		MessageType:    msgType,
+		GenesisRef:     n.chain.GetGenesisRef(),
+		InnerRef:       msgInnerRef,
+		Timestamp:      &ts,
+		AppMessageType: appMsgType,
+	}
+
+	select {
+	case n.outboxCh <- nm:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // readGenesisState attempts to follow the genesis block references.
 func (n *Node) readGenesisState(ctx context.Context) error {
 	encStrat := n.chain.GetEncryptionStrategy()
@@ -193,41 +233,6 @@ func (n *Node) writeState(ctx context.Context) error {
 	}
 
 	return n.db.Set(ctx, []byte("/state"), dat)
-}
-
-// GetProcess returns the process.
-func (n *Node) GetProcess() goprocess.Process {
-	return n.proc
-}
-
-// GetPeerStore returns the peer store.
-func (n *Node) GetPeerStore() *peer.PeerStore {
-	return n.peerStore
-}
-
-// SendMessage submits a message to the node pubsub.
-func (n *Node) SendMessage(
-	ctx context.Context,
-	msgType inca.NodeMessageType,
-	appMsgType uint32,
-	msgInnerRef *storageref.StorageRef,
-) error {
-	// Build the NodeMessage object
-	ts := timestamp.Now()
-	nm := &inca.NodeMessage{
-		MessageType:    msgType,
-		GenesisRef:     n.chain.GetGenesisRef(),
-		InnerRef:       msgInnerRef,
-		Timestamp:      &ts,
-		AppMessageType: appMsgType,
-	}
-
-	select {
-	case n.outboxCh <- nm:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
 }
 
 // pubsubSendMsg actually emits a node message to the pubsub channel.

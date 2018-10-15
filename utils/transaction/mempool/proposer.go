@@ -7,6 +7,7 @@ import (
 
 	"github.com/aperturerobotics/inca-go/block"
 	"github.com/aperturerobotics/inca-go/chain/state"
+	"github.com/aperturerobotics/inca-go/logctx"
 	"github.com/aperturerobotics/inca-go/utils/transaction"
 	"github.com/aperturerobotics/objstore"
 	"github.com/aperturerobotics/pbobject"
@@ -82,9 +83,9 @@ func (p *Proposer) ProposeBlock(
 	var collectCtxCancel context.CancelFunc
 
 	roundDur := chainState.RoundEndTime.Sub(chainState.RoundStartTime)
-	waitUntil := chainState.RoundStartTime.Add(p.opts.ProposeWaitRatio * roundDur)
+	waitUntil := chainState.RoundStartTime.Add(time.Duration(p.opts.ProposeWaitRatio) * roundDur)
 	if deadlineRatio := p.opts.ProposeDeadlineRatio; deadlineRatio != 0 {
-		deadlineTime := chainState.RoundStartTime.Add(roundDur * deadlineRatio)
+		deadlineTime := chainState.RoundStartTime.Add(roundDur * time.Duration(deadlineRatio))
 		collectCtx, collectCtxCancel = context.WithDeadline(ctx, deadlineTime)
 	} else {
 		collectCtx, collectCtxCancel = context.WithCancel(ctx)
@@ -181,11 +182,11 @@ func (p *Proposer) ProposeBlock(
 	var appliedTxs []string
 	for tx := range resolvedTxs {
 		appliedTxs = append(appliedTxs, tx.GetID())
-		sysErr, txErr = afterState.Apply(ctx, tx)
+		sysErr, txErr := afterState.Apply(ctx, tx)
 		if txErr != nil {
 			if sysErr {
 				errCh <- txErr
-				_ = p.mempool.Enqueue(ctx, txID)
+				_ = p.mempool.Enqueue(ctx, tx.GetID())
 				collectCtxCancel()
 			}
 
@@ -210,7 +211,7 @@ func (p *Proposer) ProposeBlock(
 		return nil, errors.New("object store not set, cannot propose blocks")
 	}
 
-	if len(txSet.TransactionRefs) < p.opts.MinBlockTransactions {
+	if len(txSet.TransactionRefs) < int(p.opts.MinBlockTransactions) {
 		for _, tx := range appliedTxs {
 			_ = p.mempool.Enqueue(ctx, tx)
 		}
@@ -222,9 +223,15 @@ func (p *Proposer) ProposeBlock(
 		return nil, err
 	}
 
+	encConf := p.opts.EncryptionConfig
+	txSetRef, _, err := objStore.StoreObject(ctx, txSet, encConf)
+	if err != nil {
+		return nil, err
+	}
+
 	nextState := &transaction.BlockState{
 		ApplicationStateRef: stateRef,
-		TransactionSetRef:   txSet,
+		TransactionSetRef:   txSetRef,
 	}
 
 	le := logctx.GetLogEntry(ctx)
@@ -232,7 +239,7 @@ func (p *Proposer) ProposeBlock(
 		WithField("tx-count", len(txSet.GetTransactionRefs())).
 		Info("proposing block")
 
-	propRef, _, err := objStore.StoreObject(ctx, nextState, p.encConf)
+	propRef, _, err := objStore.StoreObject(ctx, nextState, encConf)
 	if err == nil {
 		p.app.Promote(afterState)
 	}

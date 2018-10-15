@@ -21,13 +21,13 @@ type Mempool struct {
 	ctx           context.Context
 	txHeap        *fibheap.FibbonaciHeap
 	txDb          *txdb.TxDatabase
-	orderer       MempoolOrderer
+	orderer       Orderer
 	enqueueNotify sync.Map // map[uint32]func()
 	notifyIDCtr   uint32
 }
 
-// MempoolOrderer determines the priority value for a transaction.
-type MempoolOrderer func(ctx context.Context, txDb *txdb.TxDatabase, txID string) (float64, error)
+// Orderer determines the priority value for a transaction.
+type Orderer func(ctx context.Context, txDb *txdb.TxDatabase, txID string) (float64, error)
 
 // TimestampOrderer orders transaction by timestamp.
 func TimestampOrderer(ctx context.Context, txDb *txdb.TxDatabase, txID string) (float64, error) {
@@ -58,7 +58,7 @@ func TimestampOrderer(ctx context.Context, txDb *txdb.TxDatabase, txID string) (
 type Opts struct {
 	// Orderer controls the order transactions are processed.
 	// Default is earliest-first.
-	Orderer MempoolOrderer
+	Orderer Orderer
 }
 
 // NewMempool constructs a mempool, loading state from the database.
