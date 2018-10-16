@@ -284,9 +284,9 @@ func (n *Node) processPubSub() error {
 			return err
 		}
 
-		le := n.le.WithField("ipfs-peer-id", record.From().Pretty())
+		le := n.le.WithField("ipfs-peer-id", record.From.Pretty())
 		msg := &inca.ChainPubsubMessage{}
-		dat, err := base64.StdEncoding.DecodeString(string(record.Data()))
+		dat, err := base64.StdEncoding.DecodeString(string(record.Data))
 		if err != nil {
 			le.WithError(err).Warn("pub-sub message invalid base64 string")
 			continue
@@ -297,14 +297,14 @@ func (n *Node) processPubSub() error {
 			continue
 		}
 
-		peerId, err := lpeer.IDB58Decode(msg.GetPeerId())
+		peerID, err := lpeer.IDB58Decode(msg.GetPeerId())
 		if err != nil {
 			le.WithError(err).Warn("pub-sub message ignoring invalid peer id")
 			continue
 		}
 
-		le = le.WithField("peer-id", peerId.Pretty())
-		peer := n.peerStore.GetPeer(peerId)
+		le = le.WithField("peer-id", peerID.Pretty())
+		peer := n.peerStore.GetPeer(peerID)
 		if peer == nil {
 			le.WithError(err).Warn("pub-sub message ignoring unknown peer id")
 			continue
