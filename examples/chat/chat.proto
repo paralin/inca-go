@@ -1,0 +1,11 @@
+syntax = "proto3";
+package main;
+
+// ChatState is the application state.
+message ChatState {
+  uint32 message_count = 1;
+}
+
+// ChatTransaction is a chat transaction.
+message ChatTransaction {
+}

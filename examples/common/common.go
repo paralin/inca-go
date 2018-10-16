@@ -19,6 +19,7 @@ import (
 	dbcli "github.com/aperturerobotics/objstore/db/cli"
 	"github.com/aperturerobotics/objstore/ipfs"
 	"github.com/aperturerobotics/objstore/localdb"
+	"github.com/aperturerobotics/storageref"
 
 	"github.com/golang/protobuf/jsonpb"
 	"github.com/libp2p/go-libp2p-crypto"
@@ -88,6 +89,7 @@ func Build(
 	ctx context.Context,
 	proposer block.Proposer,
 	validator block.Validator,
+	buildInitState func(ctx context.Context) (*storageref.StorageRef, error),
 ) (*Common, error) {
 	le := logctx.GetLogEntry(ctx)
 
@@ -149,6 +151,13 @@ func Build(
 	{
 		if _, err := os.Stat(chainConfigPath); os.IsNotExist(err) {
 			le.Info("minting new blockchain")
+			var initState *storageref.StorageRef
+			if buildInitState != nil {
+				initState, err = buildInitState(ctx)
+				if err != nil {
+					return nil, err
+				}
+			}
 			mintCtx, mintCtxCancel := context.WithCancel(ctx)
 			nch, err := chain.NewChain(
 				mintCtx,
@@ -157,6 +166,7 @@ func Build(
 				"counter-test-1",
 				nodePriv,
 				nil,
+				initState,
 			)
 			mintCtxCancel()
 			if err != nil {

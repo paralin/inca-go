@@ -1,0 +1,19 @@
+syntax = "proto3";
+package mock;
+
+import "github.com/aperturerobotics/storageref/storageref.proto";
+
+// Transaction is a mock transaction.
+message Transaction {
+  bytes inner_data = 1;
+}
+
+// AppState contains the mock app state.
+message AppState {
+  // AppliedTxCount is the number of txes applied.
+  uint32 applied_tx_count = 1;
+  // AppliedTxSize is the total size of the tx inner data applied.
+  uint32 applied_tx_size = 2;
+  // LastTxData is the last inner data applied.
+  bytes last_tx_data = 3;
+}

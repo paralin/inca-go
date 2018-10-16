@@ -39,10 +39,7 @@ type Peer struct {
 
 	state         ipeer.PeerState
 	genesisDigest []byte
-
-	// the following variables are managed by the process loop
-	incomingPubsubCh chan *inca.ChainPubsubMessage
-	encStrat         encryption.Strategy
+	encStrat      encryption.Strategy
 
 	msgSubs sync.Map
 	handler PeerHandler
@@ -68,36 +65,20 @@ func NewPeer(
 	peerID, _ := lpeer.IDFromPublicKey(pubKey)
 	db = dbm.WithPrefix(db, []byte(fmt.Sprintf("/%s", peerID.Pretty())))
 	p := &Peer{
-		ctx:              ctx,
-		le:               le.WithField("peer", peerID.Pretty()),
-		db:               db,
-		peerPubKey:       pubKey,
-		peerID:           peerID,
-		objStore:         objStore,
-		handler:          handler,
-		genesisDigest:    genesisDigest,
-		incomingPubsubCh: make(chan *inca.ChainPubsubMessage, 10),
-		encStrat:         encStrat,
+		ctx:           ctx,
+		le:            le.WithField("peer", peerID.Pretty()),
+		db:            db,
+		peerPubKey:    pubKey,
+		peerID:        peerID,
+		objStore:      objStore,
+		handler:       handler,
+		genesisDigest: genesisDigest,
+		encStrat:      encStrat,
 	}
 	if err := p.readState(ctx); err != nil {
 		return nil, err
 	}
-	go p.processPeer()
 	return p, nil
-}
-
-// processPeer processes a peer.
-func (p *Peer) processPeer() {
-	for {
-		select {
-		case <-p.ctx.Done():
-			return
-		case pubSubMsg := <-p.incomingPubsubCh:
-			if err := p.processIncomingPubsubMessage(pubSubMsg); err != nil {
-				p.le.WithError(err).Warn("dropping invalid pubsub message")
-			}
-		}
-	}
 }
 
 // processIncomingPubsubMessage processes an incoming pubsub message.
@@ -111,12 +92,37 @@ func (p *Peer) processIncomingPubsubMessage(pubsubMsg *inca.ChainPubsubMessage) 
 		return errors.New("object digest cannot be empty")
 	}
 
-	encConf := p.encStrat.GetNodeMessageEncryptionConfigWithDigest(p.GetPublicKey(), msgRef.GetObjectDigest())
+	encConf := p.encStrat.GetNodeMessageEncryptionConfigWithDigest(
+		p.GetPublicKey(),
+		msgRef.GetObjectDigest(),
+	)
 	subCtx := pbobject.WithEncryptionConf(p.ctx, &encConf)
 
 	nm := &inca.NodeMessage{}
 	if err := msgRef.FollowRef(subCtx, nil, nm, nil); err != nil {
 		return err
+	}
+
+	nmPubDat := nm.GetPubKey()
+	if len(nmPubDat) == 0 {
+		return errors.New("node message has no public key")
+	}
+
+	nmPub, err := crypto.UnmarshalPublicKey(nmPubDat)
+	if err != nil {
+		return errors.Wrap(err, "unmarshal node message public key")
+	}
+
+	peerPub := p.GetPublicKey()
+	if !nmPub.Equals(peerPub) {
+		nmPubID, _ := lpeer.IDFromPublicKey(nmPub)
+		peerPubID, _ := lpeer.IDFromPublicKey(peerPub)
+
+		return errors.Errorf(
+			"node message public key mismatch: %s != %s (expected)",
+			nmPubID.Pretty(),
+			peerPubID.Pretty(),
+		)
 	}
 
 	return p.processIncomingNodeMessage(nm)
@@ -147,6 +153,7 @@ func (p *Peer) processIncomingNodeMessage(nm *inca.NodeMessage) error {
 
 	innerRef := nm.GetInnerRef()
 	_ = innerRef
+
 	le.WithField("msg-type", nm.GetMessageType().String()).Debug("received node message")
 	p.state.LastObservedMessage = nm
 	if err := p.writeState(p.ctx); err != nil {
@@ -180,11 +187,11 @@ func (p *Peer) processIncomingNodeMessage(nm *inca.NodeMessage) error {
 
 // readState loads the peer state from the database.
 func (p *Peer) readState(ctx context.Context) error {
-	dat, err := p.db.Get(ctx, []byte("/state"))
+	dat, datOk, err := p.db.Get(ctx, []byte("/state"))
 	if err != nil {
 		return err
 	}
-	if dat == nil {
+	if !datOk {
 		return nil
 	}
 	return proto.Unmarshal(dat, &p.state)
@@ -203,19 +210,7 @@ func (p *Peer) writeState(ctx context.Context) error {
 // ProcessNodePubsubMessage processes an incoming node pubsub message.
 // The message may not be from this peer, it needs to be verfied.
 func (p *Peer) ProcessNodePubsubMessage(msg *inca.ChainPubsubMessage) {
-EnqueueLoop:
-	for {
-		select {
-		case p.incomingPubsubCh <- msg:
-			break EnqueueLoop
-		default:
-			select {
-			case <-p.incomingPubsubCh:
-				p.le.Warn("dropping old node message")
-			default:
-			}
-		}
-	}
+	p.processIncomingPubsubMessage(msg)
 }
 
 // GetPublicKey returns the peer public key.

@@ -21,14 +21,13 @@ const BlockCommitRatio float32 = 0.66
 // Block is a block header wrapped with some context.
 type Block struct {
 	iblock.State
-	dbm       db.Db
-	blk       *inca.Block
-	header    *inca.BlockHeader
-	encStrat  encryption.Strategy
-	blkRef    *storageref.StorageRef
-	validator Validator
-	id        string
-	dbKey     []byte
+	dbm      db.Db
+	blk      *inca.Block
+	header   *inca.BlockHeader
+	encStrat encryption.Strategy
+	blkRef   *storageref.StorageRef
+	id       string
+	dbKey    []byte
 }
 
 // FollowBlockRef follows a reference to a Block object.
@@ -65,7 +64,6 @@ func FollowBlockHeaderRef(
 func GetBlock(
 	ctx context.Context,
 	encStrat encryption.Strategy,
-	validator Validator,
 	dbm db.Db,
 	blockRef *storageref.StorageRef,
 ) (*Block, error) {
@@ -80,13 +78,12 @@ func GetBlock(
 	}
 
 	b := &Block{
-		id:        base64.StdEncoding.EncodeToString(blockRef.GetObjectDigest()),
-		dbm:       dbm,
-		blk:       blk,
-		encStrat:  encStrat,
-		header:    blkHeader,
-		blkRef:    blockRef,
-		validator: validator,
+		id:       base64.StdEncoding.EncodeToString(blockRef.GetObjectDigest()),
+		dbm:      dbm,
+		blk:      blk,
+		encStrat: encStrat,
+		header:   blkHeader,
+		blkRef:   blockRef,
 	}
 	b.dbKey = []byte(fmt.Sprintf("/%s", b.id))
 
@@ -105,12 +102,9 @@ func (b *Block) GetDbKey() []byte {
 // ReadState loads the peer state from the database.
 func (b *Block) ReadState(ctx context.Context) error {
 	dbKey := b.GetDbKey()
-	dat, err := b.dbm.Get(ctx, dbKey)
-	if err != nil {
+	dat, datOk, err := b.dbm.Get(ctx, dbKey)
+	if err != nil || !datOk {
 		return err
-	}
-	if dat == nil {
-		return nil
 	}
 	return proto.Unmarshal(dat, &b.State)
 }
@@ -156,7 +150,11 @@ func (b *Block) fetchChainConfig(ctx context.Context) (*inca.ChainConfig, error)
 // ValidateChild checks if a block can be the next in the sequence.
 // TODO: validate timestamps on round
 // Returns markValid, which indicates that the block should be considered valid without a known parent.
-func (b *Block) ValidateChild(ctx context.Context, child *Block) (bool, error) {
+func (b *Block) ValidateChild(
+	ctx context.Context,
+	child *Block,
+	blockValidator Validator,
+) (bool, error) {
 	bHeader := b.header
 	childHeader := child.header
 
@@ -223,8 +221,8 @@ func (b *Block) ValidateChild(ctx context.Context, child *Block) (bool, error) {
 	}
 
 	// TODO: decide if this is always required.
-	if b.validator != nil {
-		return b.validator.ValidateBlock(ctx, child, b)
+	if blockValidator != nil {
+		return blockValidator.ValidateBlock(ctx, child, b)
 	}
 
 	return false, nil

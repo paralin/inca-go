@@ -2,7 +2,6 @@ package mempool
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"github.com/aperturerobotics/inca-go/block"
@@ -17,23 +16,29 @@ import (
 
 // Proposer is a block proposer that pulls transactions from a mempool.
 type Proposer struct {
-	opts     ProposerOpts
-	mempool  *Mempool
-	app      Application
-	appState ApplicationState
+	ctx     context.Context
+	opts    ProposerOpts
+	mempool *Mempool
+	app     Application
 }
 
 // NewProposer builds a new proposer.
+// Context controls cancellation globally.
 func NewProposer(
+	ctx context.Context,
 	memPool *Mempool,
 	opts ProposerOpts,
 	app Application,
 ) (*Proposer, error) {
+	if err := opts.Validate(); err != nil {
+		return nil, err
+	}
+
 	return &Proposer{
-		opts:     opts,
-		mempool:  memPool,
-		app:      app,
-		appState: app.GetState(),
+		ctx:     ctx,
+		opts:    opts,
+		mempool: memPool,
+		app:     app,
 	}, nil
 }
 
@@ -41,9 +46,9 @@ func NewProposer(
 type ProposerOpts struct {
 	// ProposeDeadlineRatio is the max percentage of round duration to use for gathering transactions.
 	// After this deadline, if at least one transaction was found, it will be processed in the block.
-	// If EmitEmptyBlocks is set, this timing will also be used to emit the empty block.
 	// If this is set to 1, the proposal will be fired after the wait ratio.
 	// If this is set to 0, a default of 0.5 is used.
+	// TODO: If EmitEmptyBlocks is set, this timing will also be used to emit the empty block.
 	ProposeDeadlineRatio float32
 	// ProposeWaitRatio is the min percentage of round duration to use for gathering transactions.
 	// No proposal will be emitted before this time. This is to throttle block emission rate.
@@ -82,6 +87,22 @@ func (p *Proposer) ProposeBlock(
 	var collectCtx context.Context
 	var collectCtxCancel context.CancelFunc
 
+	le := logctx.GetLogEntry(ctx)
+	ctx = pbobject.WithEncryptionConf(ctx, &p.opts.EncryptionConfig)
+	objStore := objstore.GetObjStore(ctx)
+	if objStore == nil {
+		return nil, errors.New("object store not set, cannot propose blocks")
+	}
+
+	// Pull the previous block state.
+	var blkState transaction.BlockState
+	err := parentBlk.
+		GetStateRef().
+		FollowRef(ctx, nil, &blkState, nil)
+	if err != nil {
+		return nil, errors.Wrap(err, "parent block state lookup")
+	}
+
 	roundDur := chainState.RoundEndTime.Sub(chainState.RoundStartTime)
 	waitUntil := chainState.RoundStartTime.Add(time.Duration(p.opts.ProposeWaitRatio) * roundDur)
 	if deadlineRatio := p.opts.ProposeDeadlineRatio; deadlineRatio != 0 {
@@ -92,140 +113,161 @@ func (p *Proposer) ProposeBlock(
 	}
 	defer collectCtxCancel()
 
-	// Stage: collect transactions
-	collectedTxIds := make(chan string, 5)
+	// Stage: collect transaction IDs
+	collectedTxIds := make(chan string)
 	errCh := make(chan error, 3)
 	go func() {
+		// Kick this off early to start the fibheap computations.
 		errCh <- p.mempool.CollectTransactions(
 			collectCtx,
 			int(p.opts.MaxBlockTranasctions),
 			collectedTxIds,
 		)
+		close(collectedTxIds)
 	}()
 
-	// Stage: resolve transactions
-	resolvedTxs := make(chan *transaction.Transaction, 5)
-	beforeState := p.appState
-	afterState := beforeState.Snapshot()
+	// Stage: resolve transactions (dequeue from pool)
+	resolvedTxs := make(chan *transaction.Transaction)
+	pendingState, err := p.app.GetStateAtBlock(ctx, parentBlk, &blkState)
+	if err != nil {
+		return nil, errors.Wrap(err, "parent app state lookup")
+	}
+
 	go func() {
 		defer close(resolvedTxs)
-		for txID := range collectedTxIds {
+
+		txDb := p.mempool.GetTransactionDb()
+		for {
+			var txID string
+			var ok bool
 			select {
+			case txID, ok = <-collectedTxIds:
+				if !ok {
+					return
+				}
 			case <-collectCtx.Done():
-				_ = p.mempool.Enqueue(ctx, txID)
-				continue
-			default:
+				return
 			}
 
-			txDb := p.mempool.GetTransactionDb()
 			tx, err := txDb.GetTx(collectCtx, txID)
 			if err != nil {
+				le.WithError(err).Warn("unable to lookup tx")
 				if err == context.Canceled || err == context.DeadlineExceeded {
-					_ = p.mempool.Enqueue(ctx, txID)
-					continue
+					_ = p.mempool.Enqueue(p.ctx, txID)
 				}
-
-				continue // drop this tx
+				continue
 			}
 
-			sysErr, txErr := beforeState.PrePoolCheckTx(ctx, tx)
+			sysErr, txErr := pendingState.PrePoolCheckTx(ctx, tx)
 			if txErr != nil {
-				if sysErr {
+				if sysErr || txErr == context.Canceled || txErr == context.DeadlineExceeded {
 					errCh <- txErr
-					_ = p.mempool.Enqueue(ctx, txID)
+					_ = p.mempool.Enqueue(p.ctx, txID)
 					collectCtxCancel()
 				}
-
-				// skip this tx
-				continue
+				return
 			}
 
 			select {
 			case <-collectCtx.Done():
+				_ = p.mempool.Enqueue(p.ctx, txID)
+				return
 			case resolvedTxs <- tx:
 			}
 		}
 	}()
 
-	// Pay attention to timing and cancel collect ctx.
-	var txSetMtx sync.Mutex
+	// Stage: apply transactions.
+	var appliedTxs []string
+	requeueTxs := func() {
+		for _, txID := range appliedTxs {
+			_ = p.mempool.Enqueue(p.ctx, txID)
+		}
+	}
+
 	txSet := &transaction.TransactionSet{}
-	txProcessedNotify := make(chan struct{}, 1)
-	go func() {
-		// Recheck every 500ms and/or when tx was processed
-		recheckTicker := time.NewTicker(time.Millisecond * 500)
-		defer recheckTicker.Stop()
-		for {
-			now := time.Now()
-			afterWaitUntil := waitUntil.Before(now)
+TxLoop:
+	for {
+		var tx *transaction.Transaction
+		var ok bool
+		select {
+		case err := <-errCh:
+			if err != nil {
+				if len(appliedTxs) == 0 && err == context.Canceled {
+					return nil, nil
+				}
 
-			minTx := p.opts.MinBlockTransactions
-			txSetMtx.Lock()
-			txRefs := txSet.TransactionRefs
-			txSetMtx.Unlock()
-			txCount := len(txRefs)
-			if minTx > 0 && afterWaitUntil && txCount >= int(minTx) {
-				collectCtxCancel()
-				return
+				requeueTxs()
+				return nil, err
 			}
-
-			select {
-			case <-collectCtx.Done():
-				return
-			case <-txProcessedNotify:
-			case <-recheckTicker.C:
+			continue
+		case <-ctx.Done():
+			requeueTxs()
+			return nil, ctx.Err()
+		case tx, ok = <-resolvedTxs:
+			if !ok {
+				break TxLoop
 			}
 		}
-	}()
 
-	// Stage: apply transactions
-	var appliedTxs []string
-	for tx := range resolvedTxs {
 		appliedTxs = append(appliedTxs, tx.GetID())
-		sysErr, txErr := afterState.Apply(ctx, tx)
+		sysErr, txErr := pendingState.Apply(ctx, tx)
 		if txErr != nil {
 			if sysErr {
-				errCh <- txErr
-				_ = p.mempool.Enqueue(ctx, tx.GetID())
-				collectCtxCancel()
+				requeueTxs()
+				return nil, txErr
 			}
 
-			// skip this tx
+			appliedTxs = appliedTxs[:len(appliedTxs)-1]
 			continue
 		}
 
-		txSetMtx.Lock()
-		txSet.TransactionRefs = append(txSet.TransactionRefs, tx.GetStorageRef())
-		txSetMtx.Unlock()
+		txSet.TransactionRefs = append(txSet.TransactionRefs, tx.GetNodeMessageRef())
 
-		select {
-		case txProcessedNotify <- struct{}{}:
-		default:
+		txCount := int32(len(appliedTxs))
+		hasMinTxs := txCount > p.opts.MinBlockTransactions
+		if p.opts.MinBlockTransactions == 0 {
+			hasMinTxs = txCount != 0
+		}
+
+		hasMaxTxs := txCount >= p.opts.MaxBlockTranasctions
+		waitDurElapsed := time.Now().After(waitUntil)
+		if hasMinTxs && (hasMaxTxs || waitDurElapsed) {
+			break
 		}
 	}
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			return nil, err
+		}
+	default:
+	}
+
+	le = le.
+		WithField("tx-count", len(txSet.GetTransactionRefs()))
 
 	// Finally, return new app state ref as in-band.
-	ctx = pbobject.WithEncryptionConf(ctx, &p.opts.EncryptionConfig)
-	objStore := objstore.GetObjStore(ctx)
-	if objStore == nil {
-		return nil, errors.New("object store not set, cannot propose blocks")
-	}
-
 	if len(txSet.TransactionRefs) < int(p.opts.MinBlockTransactions) {
-		for _, tx := range appliedTxs {
-			_ = p.mempool.Enqueue(ctx, tx)
-		}
+		// Abstain, not enough transactions.
+		requeueTxs()
+
+		le = le.WithField("min-tx-count", p.opts.MinBlockTransactions)
+		le.Debug("abstaining, not enough transactions")
 		return nil, nil
 	}
 
-	stateRef, err := afterState.Serialize()
+	stateRef, err := pendingState.Serialize(ctx)
 	if err != nil {
+		requeueTxs()
 		return nil, err
 	}
 
 	encConf := p.opts.EncryptionConfig
 	txSetRef, _, err := objStore.StoreObject(ctx, txSet, encConf)
 	if err != nil {
+		requeueTxs()
 		return nil, err
 	}
 
@@ -234,15 +276,11 @@ func (p *Proposer) ProposeBlock(
 		TransactionSetRef:   txSetRef,
 	}
 
-	le := logctx.GetLogEntry(ctx)
-	le.
-		WithField("tx-count", len(txSet.GetTransactionRefs())).
-		Info("proposing block")
-
 	propRef, _, err := objStore.StoreObject(ctx, nextState, encConf)
-	if err == nil {
-		p.app.Promote(afterState)
+	if err != nil {
+		requeueTxs()
+		return nil, err
 	}
 
-	return propRef, err
+	return propRef, nil
 }

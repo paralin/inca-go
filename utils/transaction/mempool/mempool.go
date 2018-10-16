@@ -5,12 +5,9 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/aperturerobotics/inca"
 	"github.com/aperturerobotics/inca-go/utils/transaction/txdb"
 	"github.com/aperturerobotics/objstore/db"
 	"github.com/aperturerobotics/objstore/dbds/fibheap"
-	"github.com/aperturerobotics/pbobject"
-	"github.com/pkg/errors"
 )
 
 // Mempool is an implementation of an In-Memory Queued Transaction Pool.
@@ -24,34 +21,6 @@ type Mempool struct {
 	orderer       Orderer
 	enqueueNotify sync.Map // map[uint32]func()
 	notifyIDCtr   uint32
-}
-
-// Orderer determines the priority value for a transaction.
-type Orderer func(ctx context.Context, txDb *txdb.TxDatabase, txID string) (float64, error)
-
-// TimestampOrderer orders transaction by timestamp.
-func TimestampOrderer(ctx context.Context, txDb *txdb.TxDatabase, txID string) (float64, error) {
-	txInfo, err := txDb.Get(ctx, txID)
-	if err != nil {
-		return 0, err
-	}
-
-	if txInfo == nil {
-		return 0, errors.Errorf("transaction not found: %s", txID)
-	}
-
-	nodeMessage := &inca.NodeMessage{}
-	nodeMessageWrapper := &pbobject.ObjectWrapper{}
-	if err := txInfo.GetNodeMessageRef().FollowRef(
-		ctx,
-		nil,
-		nodeMessage,
-		nodeMessageWrapper,
-	); err != nil {
-		return 0, err
-	}
-
-	return float64(nodeMessage.GetTimestamp().GetTimeUnixMs()), nil
 }
 
 // Opts are options passed to the mempool to tweak functionality.
@@ -118,7 +87,6 @@ func (m *Mempool) CollectTransactions(
 		default:
 		}
 	})
-	defer close(outCh)
 	defer m.enqueueNotify.Delete(enqueueID)
 
 	for {

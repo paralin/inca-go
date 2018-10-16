@@ -65,13 +65,9 @@ func (s *Segment) writeState(ctx context.Context) error {
 // Note: the state object must be allocated, and the ID set.
 // If the key does not exist nothing happens.
 func (s *Segment) readState(ctx context.Context) error {
-	dat, err := s.dbm.Get(ctx, s.dbKey())
-	if err != nil {
+	dat, datOk, err := s.dbm.Get(ctx, s.dbKey())
+	if err != nil || !datOk {
 		return err
-	}
-
-	if len(dat) == 0 {
-		return nil
 	}
 
 	return proto.Unmarshal(dat, &s.state)
@@ -83,6 +79,7 @@ func (s *Segment) AppendBlock(
 	blkRef *storageref.StorageRef,
 	blk *block.Block,
 	blkParent *block.Block,
+	blkValidator block.Validator,
 	encStrat encryption.Strategy,
 ) error {
 	blkParentNextRef := blkParent.GetNextBlock()
@@ -105,7 +102,7 @@ func (s *Segment) AppendBlock(
 		return errors.Errorf("fork: next segment already exists")
 	}
 
-	isValid, err := blkParent.ValidateChild(ctx, blk)
+	isValid, err := blkParent.ValidateChild(ctx, blk, blkValidator)
 	if err != nil {
 		return err
 	}
@@ -161,7 +158,6 @@ func (s *Segment) RewindOnce(
 	tailBlkObj, err := block.GetBlock(
 		ctx,
 		encStrat,
-		blockValidator,
 		blockDbm,
 		tailRef,
 	)
@@ -178,7 +174,6 @@ func (s *Segment) RewindOnce(
 	prevBlk, err := block.GetBlock(
 		ctx,
 		encStrat,
-		blockValidator,
 		blockDbm,
 		prevBlockRef,
 	)
@@ -216,7 +211,7 @@ func (s *Segment) RewindOnce(
 	s.state.TailBlock = prevBlockRef
 	s.state.TailBlockRound = prevBlk.GetHeader().GetRoundInfo()
 
-	isValid, err := prevBlk.ValidateChild(ctx, tailBlkObj)
+	isValid, err := prevBlk.ValidateChild(ctx, tailBlkObj, blockValidator)
 	if err != nil {
 		s.le.WithError(err).Warn("segment rewound to invalid block, marking as invalid")
 		s.state.Status = isegment.SegmentStatus_SegmentStatus_INVALID
@@ -275,7 +270,6 @@ func (s *Segment) AppendSegment(
 	tailBlk, err := block.GetBlock(
 		ctx,
 		encStrat,
-		blockValidator,
 		blockDbm,
 		tailRef,
 	)
@@ -287,7 +281,6 @@ func (s *Segment) AppendSegment(
 	sHeadBlk, err := block.GetBlock(
 		ctx,
 		encStrat,
-		blockValidator,
 		blockDbm,
 		sHeadRef,
 	)
@@ -295,7 +288,7 @@ func (s *Segment) AppendSegment(
 		return err
 	}
 
-	isValid, err := sHeadBlk.ValidateChild(ctx, tailBlk)
+	isValid, err := sHeadBlk.ValidateChild(ctx, tailBlk, blockValidator)
 	if err != nil {
 		segNext.state.Status = isegment.SegmentStatus_SegmentStatus_INVALID
 		s.le.

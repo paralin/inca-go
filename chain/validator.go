@@ -88,13 +88,9 @@ func NewValidator(
 // Note: the state object must be allocated, and the ID set.
 // If the key does not exist nothing happens.
 func (p *Validator) readState(ctx context.Context) error {
-	dat, err := p.dbm.Get(ctx, []byte("/state"))
-	if err != nil {
+	dat, datOk, err := p.dbm.Get(ctx, []byte("/state"))
+	if err != nil || !datOk {
 		return err
-	}
-
-	if len(dat) == 0 {
-		return nil
 	}
 
 	return proto.Unmarshal(dat, &p.state)

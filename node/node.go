@@ -213,13 +213,9 @@ func (n *Node) readGenesisState(ctx context.Context) error {
 
 // readState attempts to read the state out of the db.
 func (n *Node) readState() error {
-	dat, err := n.db.Get(n.ctx, []byte("/state"))
-	if err != nil {
+	dat, datOk, err := n.db.Get(n.ctx, []byte("/state"))
+	if err != nil || !datOk {
 		return err
-	}
-
-	if len(dat) == 0 {
-		return nil
 	}
 
 	return proto.Unmarshal(dat, &n.state)
