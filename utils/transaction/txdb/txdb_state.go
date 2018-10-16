@@ -21,12 +21,12 @@ func (h *TxDatabase) getEntry(
 	}
 
 	idKey := h.getIDKey(id)
-	d, err := h.db.Get(ctx, idKey)
+	d, dOk, err := h.db.Get(ctx, idKey)
 	if err != nil {
 		return nil, err
 	}
 
-	if len(d) == 0 {
+	if !dOk {
 		return nil, nil
 	}
 

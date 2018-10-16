@@ -60,7 +60,7 @@ type Chain struct {
 
 	stateSubs       sync.Map
 	lastHeadDigest  []byte
-	lastBlock       *inca.Block
+	lastBlock       *block.Block
 	lastBlockHeader *inca.BlockHeader
 	lastBlockRef    *storageref.StorageRef
 	segStore        *segment.SegmentStore
@@ -69,7 +69,8 @@ type Chain struct {
 	blockProposer  block.Proposer
 }
 
-// NewChain builds a new blockchain from scratch, minting a genesis block and committing it to IPFS.
+// NewChain builds a new blockchain from scratch, minting a genesis block and
+// committing it.
 func NewChain(
 	ctx context.Context,
 	dbm idb.Db,
@@ -77,13 +78,14 @@ func NewChain(
 	chainID string,
 	validatorPriv crypto.PrivKey,
 	blockValidator block.Validator,
+	genesisStateRef *storageref.StorageRef,
 ) (*Chain, error) {
 	if chainID == "" {
 		return nil, errors.New("chain id must be set")
 	}
 
 	le := logctx.GetLogEntry(ctx)
-	if objstore.GetObjStore(ctx) == nil {
+	if objstore.GetObjStore(ctx) != db {
 		ctx = objstore.WithObjStore(ctx, db)
 	}
 
@@ -204,6 +206,7 @@ func NewChain(
 		},
 		BlockTs:    &nowTs,
 		ProposerId: validatorID.Pretty(),
+		StateRef:   genesisStateRef,
 	}
 
 	firstBlockHeaderStorageRef, _, err := db.StoreObject(
@@ -264,7 +267,6 @@ func NewChain(
 	firstBlk, err := block.GetBlock(
 		ctx,
 		ch.encStrat,
-		blockValidator,
 		ch.GetBlockDbm(),
 		firstBlockStorageRef,
 	)
@@ -289,6 +291,11 @@ func NewChain(
 	if err := ch.writeState(ctx); err != nil {
 		return nil, err
 	}
+
+	ch.lastBlockHeader = firstBlockHeader
+	ch.lastBlockRef = firstBlockStorageRef
+	ch.lastBlock = firstBlk
+	ch.lastHeadDigest = firstBlockStorageRef.GetObjectDigest()
 
 	go ch.manageState()
 	return ch, nil
@@ -352,6 +359,12 @@ func FromConfig(
 	return ch, nil
 }
 
+// GetContext returns the chain context.
+// This context is bound to the chain object store.
+func (c *Chain) GetContext() context.Context {
+	return c.ctx
+}
+
 // GetPubsubTopic returns the pubsub topic name.
 func (c *Chain) GetPubsubTopic() string {
 	return c.pubsubTopic
@@ -411,6 +424,11 @@ func (c *Chain) GetBlockDbm() idb.Db {
 	return idb.WithPrefix(c.dbm, []byte("/blocks"))
 }
 
+// GetHeadBlock returns the current head block.
+func (c *Chain) GetHeadBlock() *block.Block {
+	return c.lastBlock
+}
+
 // HandleBlockCommit handles an incoming block commit.
 func (c *Chain) HandleBlockCommit(
 	p *peer.Peer,
@@ -423,7 +441,6 @@ func (c *Chain) HandleBlockCommit(
 	blkObj, err := block.GetBlock(
 		ctx,
 		encStrat,
-		c.GetBlockValidator(),
 		blkDbm,
 		blkRef,
 	)
@@ -443,7 +460,6 @@ func (c *Chain) HandleBlockCommit(
 	blkParentObj, err := block.GetBlock(
 		ctx,
 		encStrat,
-		c.GetBlockValidator(),
 		blkDbm,
 		blkHeader.GetLastBlockRef(),
 	)
@@ -464,6 +480,7 @@ func (c *Chain) HandleBlockCommit(
 			blkRef,
 			blkObj,
 			blkParentObj,
+			c.blockValidator,
 			c.GetEncryptionStrategy(),
 		); err != nil {
 			return err
@@ -505,13 +522,9 @@ func (c *Chain) writeState(ctx context.Context) error {
 // Note: the state object must be allocated, and the ID set.
 // If the key does not exist nothing happens.
 func (c *Chain) readState(ctx context.Context) error {
-	dat, err := c.dbm.Get(ctx, c.dbKey())
-	if err != nil {
+	dat, datOk, err := c.dbm.Get(ctx, c.dbKey())
+	if err != nil || !datOk {
 		return err
-	}
-
-	if len(dat) == 0 {
-		return nil
 	}
 
 	return proto.Unmarshal(dat, &c.state)
@@ -605,38 +618,7 @@ func (c *Chain) manageStateOnce(ctx context.Context) error {
 	headBlockRef := seg.GetHeadBlock()
 	headDigest := headBlockRef.GetObjectDigest()
 	if bytes.Compare(headDigest, c.lastHeadDigest) != 0 {
-		headBlock, err := block.FollowBlockRef(ctx, headBlockRef, c.encStrat)
-		if err != nil {
-			return err
-		}
-
-		headBlockHeader, err := block.FollowBlockHeaderRef(
-			ctx,
-			headBlock.GetBlockHeaderRef(),
-			c.encStrat,
-		)
-		if err != nil {
-			return err
-		}
-
-		now := time.Now()
-		headBlockTs := headBlockHeader.GetBlockTs().ToTime()
-		headStr := headBlockHeader.GetRoundInfo().String()
-		if headStr == "" {
-			headStr = "genesis"
-		}
-		c.le.
-			WithField("head", headStr).
-			WithField("block-ipfs-ref", headBlock.GetBlockHeaderRef().GetIpfs().GetReference()).
-			WithField("block-ipfs-ref-type", headBlock.GetBlockHeaderRef().GetIpfs().GetIpfsRefType().String()).
-			WithField("block-time-ago", now.Sub(headBlockTs).String()).
-			Info("head block updated")
-		c.lastBlock = headBlock
-		c.lastBlockHeader = headBlockHeader
-		c.lastBlockRef = headBlockRef
-		c.lastHeadDigest = headDigest
-
-		if err := c.writeState(ctx); err != nil {
+		if err := c.setHeadBlock(ctx, headBlockRef); err != nil {
 			return err
 		}
 	}
@@ -646,6 +628,40 @@ func (c *Chain) manageStateOnce(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// setHeadBlock updates the head block.
+func (c *Chain) setHeadBlock(
+	ctx context.Context,
+	headBlockRef *storageref.StorageRef,
+) error {
+	headBlock, err := block.GetBlock(ctx, c.encStrat, c.dbm, headBlockRef)
+	if err != nil {
+		return err
+	}
+	headBlockHeaderRef := headBlock.GetInnerBlock().GetBlockHeaderRef()
+	headBlockHeader := headBlock.GetHeader()
+
+	now := time.Now()
+	headBlockTs := headBlockHeader.GetBlockTs().ToTime()
+	headStr := headBlockHeader.GetRoundInfo().String()
+	headDigest := headBlockRef.GetObjectDigest()
+	if headStr == "" {
+		headStr = "genesis"
+	}
+	c.le.
+		WithField("head", headStr).
+		WithField("block-ipfs-ref", headBlockHeaderRef.GetIpfs().GetReference()).
+		WithField("block-ipfs-ref-type", headBlockHeaderRef.GetIpfs().GetIpfsRefType().String()).
+		WithField("block-time-ago", now.Sub(headBlockTs).String()).
+		Info("head block updated")
+
+	c.lastBlock = headBlock
+	c.lastBlockHeader = headBlockHeader
+	c.lastBlockRef = headBlockRef
+	c.lastHeadDigest = headDigest
+
+	return c.writeState(ctx)
 }
 
 // computeEmitSnapshot computes the current state snapshot and emits it again if necessary.

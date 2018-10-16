@@ -48,8 +48,8 @@ func (d *DbContainer) WriteState(ctx context.Context) error {
 
 // ReadState reads the container state from the db.
 func (d *DbContainer) ReadState(ctx context.Context) error {
-	data, err := d.db.Get(ctx, d.dbKey)
-	if err != nil || len(data) == 0 {
+	data, dataOk, err := d.db.Get(ctx, d.dbKey)
+	if err != nil || !dataOk {
 		return err
 	}
 

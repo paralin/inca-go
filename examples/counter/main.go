@@ -49,7 +49,7 @@ func main() {
 
 func runCounterExample(c *cli.Context) error {
 	chainProposer := &Proposer{}
-	conf, err := common.Build(context.Background(), chainProposer, nil)
+	conf, err := common.Build(context.Background(), chainProposer, nil, nil)
 	if err != nil {
 		return err
 	}

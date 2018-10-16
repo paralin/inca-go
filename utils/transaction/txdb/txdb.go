@@ -6,7 +6,6 @@ import (
 	"github.com/aperturerobotics/inca"
 	"github.com/aperturerobotics/inca-go/utils/transaction"
 	"github.com/aperturerobotics/objstore/db"
-	"github.com/aperturerobotics/pbobject"
 	"github.com/aperturerobotics/storageref"
 	"github.com/golang/protobuf/proto"
 )
@@ -39,17 +38,16 @@ func (d *TxDatabase) GetTx(ctx context.Context, txID string) (*transaction.Trans
 
 	nm := &inca.NodeMessage{}
 	nmRef := info.GetNodeMessageRef()
-	nmWrapper := &pbobject.ObjectWrapper{}
-	if err := nmRef.FollowRef(ctx, nil, nm, nmWrapper); err != nil {
+	if err := nmRef.FollowRef(ctx, nil, nm, nil); err != nil {
 		return nil, err
 	}
 
-	tx, err := transaction.FromNodeMessage(nmWrapper, nm, nil)
+	tx, err := transaction.FromNodeMessage(nm)
 	if err != nil {
 		return nil, err
 	}
 
-	tx.SetStorageRef(nmRef)
+	tx.SetNodeMessageRef(nmRef)
 	return tx, nil
 }
 

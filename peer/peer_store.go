@@ -61,14 +61,23 @@ func (ps *PeerStore) GetPeerWithPubKey(pubKey crypto.PubKey) (*Peer, error) {
 	}
 
 	le := logctx.GetLogEntry(ps.ctx)
-	p, err := NewPeer(ps.ctx, le, ps.db, ps.objStore, pubKey, ps.genesisDigest, ps.encStrat, ps.handler)
+	p, err := NewPeer(
+		ps.ctx,
+		le,
+		ps.db,
+		ps.objStore,
+		pubKey,
+		ps.genesisDigest,
+		ps.encStrat,
+		ps.handler,
+	)
 	if err != nil {
 		return nil, err
 	}
+
 	peerObj, loaded := ps.peers.LoadOrStore(id, p)
 	if loaded {
 		p = peerObj.(*Peer)
 	}
-
 	return p, nil
 }

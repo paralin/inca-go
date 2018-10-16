@@ -11,6 +11,7 @@ import (
 	"github.com/aperturerobotics/storageref"
 	"github.com/aperturerobotics/timestamp"
 	"github.com/libp2p/go-libp2p-crypto"
+	lcrypto "github.com/libp2p/go-libp2p-crypto"
 	"github.com/pkg/errors"
 )
 
@@ -18,8 +19,9 @@ import (
 type Transaction struct {
 	id string
 
-	nodeMessage *inca.NodeMessage
-	storageRef  *storageref.StorageRef
+	nodeMessage    *inca.NodeMessage
+	nodeMessageRef *storageref.StorageRef
+	innerRef       *storageref.StorageRef
 }
 
 // GetObjectTypeID returns the object type string, used to identify types.
@@ -50,26 +52,28 @@ func (t *Transaction) GetNodeMessage() *inca.NodeMessage {
 	return t.nodeMessage
 }
 
-// GetStorageRef returns the storage ref if set by SetStorageRef.
-func (t *Transaction) GetStorageRef() *storageref.StorageRef {
-	return t.storageRef
+// GetInnerRef returns the inner reference.
+func (t *Transaction) GetInnerRef() *storageref.StorageRef {
+	return t.nodeMessage.GetInnerRef()
 }
 
-// SetStorageRef sets the storage ref.
-func (t *Transaction) SetStorageRef(storageRef *storageref.StorageRef) {
-	t.storageRef = storageRef
+// GetNodeMessageRef returns the node message ref if set by SetNodeMessageRef.
+func (t *Transaction) GetNodeMessageRef() *storageref.StorageRef {
+	return t.nodeMessageRef
 }
 
-// FromNodeMessage loads a transaction from a node message object wrapper and message.
-// It is expected that nodeMessage was decoded from obj.
-// The signature of the message and other data is validated.
+// SetNodeMessageRef sets the storage ref.
+func (t *Transaction) SetNodeMessageRef(nodeMessageRef *storageref.StorageRef) {
+	t.nodeMessageRef = nodeMessageRef
+}
+
+// FromNodeMessage loads a transaction from a node message.
 func FromNodeMessage(
-	obj *pbobject.ObjectWrapper,
 	nodeMessage *inca.NodeMessage,
-	nodeKey crypto.PubKey,
 ) (*Transaction, error) {
-	if len(obj.GetSignatures()) != 1 {
-		return nil, errors.New("expected a single signature on a transaction message wrapper")
+	nodeKey, err := lcrypto.UnmarshalPublicKey(nodeMessage.GetPubKey())
+	if err != nil {
+		return nil, err
 	}
 
 	if nodeMessage.GetMessageType() != inca.NodeMessageType_NodeMessageType_APP {
@@ -90,19 +94,16 @@ func FromNodeMessage(
 		return nil, errors.New("expected timestamped nodemessage for transaction")
 	}
 
-	if nodeKey != nil {
-		sig := obj.GetSignatures()[0]
-		if err := sig.MatchesPublicKey(nodeKey); err != nil {
-			return nil, err
-		}
-	}
-
 	tid, err := ComputeTxID(nodeMessage.GetTimestamp(), nodeKey)
 	if err != nil {
 		return nil, err
 	}
 
-	return &Transaction{id: tid, nodeMessage: nodeMessage}, nil
+	return &Transaction{
+		id:          tid,
+		nodeMessage: nodeMessage,
+		innerRef:    nodeMessage.GetInnerRef(),
+	}, nil
 }
 
 // ComputeTxID computes a transaction ID from a timestamp and node key.

@@ -5,10 +5,15 @@ import (
 	"os"
 
 	"github.com/aperturerobotics/inca-go/examples/common"
+	"github.com/aperturerobotics/inca-go/logctx"
+	"github.com/aperturerobotics/inca-go/utils/transaction"
 	"github.com/aperturerobotics/inca-go/utils/transaction/mempool"
 	"github.com/aperturerobotics/inca-go/utils/transaction/txdb"
 	"github.com/aperturerobotics/inca-go/validators"
+	"github.com/aperturerobotics/objstore"
 	"github.com/aperturerobotics/objstore/db"
+	"github.com/aperturerobotics/pbobject"
+	"github.com/aperturerobotics/storageref"
 	"github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
 )
@@ -31,7 +36,29 @@ func main() {
 
 func runChatExample(c *cli.Context) error {
 	// Initially set proposer and validator to nil.
-	conf, err := common.Build(context.Background(), nil, nil)
+	conf, err := common.Build(
+		context.Background(),
+		nil, nil,
+		func(ctx context.Context) (*storageref.StorageRef, error) {
+			objStore := objstore.GetObjStore(ctx)
+			le := logctx.GetLogEntry(ctx)
+			// Construct the initial state.
+			var state ChatState
+			ref, _, err := objStore.StoreObject(ctx, &state, pbobject.EncryptionConfig{})
+			if err != nil {
+				le.WithError(err).Error("unable to store initial state")
+			} else {
+				le.Info("stored initial state: %v", ref)
+			}
+
+			// Construct the mempool state wrapper
+			blockState := &transaction.BlockState{
+				ApplicationStateRef: ref,
+			}
+			ref, _, err = objStore.StoreObject(ctx, blockState, pbobject.EncryptionConfig{})
+			return ref, err
+		},
+	)
 	if err != nil {
 		return err
 	}
@@ -58,13 +85,14 @@ func runChatExample(c *cli.Context) error {
 	}
 
 	// Construct the app (chat app state).
-	app, err := NewChat(conf.LocalDbm)
+	app, err := NewChat(ctx, conf.LocalDbm)
 	if err != nil {
 		return err
 	}
 
 	// Construct the proposer.
 	proposer, err := mempool.NewProposer(
+		ctx,
 		memPool,
 		mempool.ProposerOpts{},
 		app,

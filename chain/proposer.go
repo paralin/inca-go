@@ -95,12 +95,12 @@ func NewProposer(
 // Note: the state object must be allocated, and the ID set.
 // If the key does not exist nothing happens.
 func (p *Proposer) readState(ctx context.Context) error {
-	dat, err := p.dbm.Get(ctx, []byte("/state"))
+	dat, datOk, err := p.dbm.Get(ctx, []byte("/state"))
 	if err != nil {
 		return err
 	}
 
-	if len(dat) == 0 {
+	if !datOk {
 		return nil
 	}
 
@@ -130,7 +130,6 @@ func (p *Proposer) makeProposal(ctx context.Context, state *state.ChainStateSnap
 	lastBlock, err := block.GetBlock(
 		ctx,
 		p.ch.GetEncryptionStrategy(),
-		p.ch.GetBlockValidator(),
 		p.ch.GetBlockDbm(),
 		state.LastBlockRef,
 	)
@@ -254,14 +253,14 @@ StateLoop:
 
 		// make the proposal
 		blockHeaderRef, _, err := p.makeProposal(stateCtx, &nextState)
-		if err != nil {
+		if err != nil && err != context.Canceled {
 			p.le.WithError(err).Error("unable to make proposal")
 		}
 
 		if blockHeaderRef == nil {
 			p.le.
 				WithField("round-height", nextState.BlockRoundInfo.String()).
-				Debug("proposer decided to abstain this round")
+				Debug("proposer abstains this round")
 			continue
 		}
 
@@ -293,7 +292,13 @@ StateLoop:
 			}
 
 			// Wait for the vote from the validator.
-			go p.waitForValidatorVote(stateCtx, peer, blockHeaderRef, int32(validator.GetVotingPower()), votingPowerAccum)
+			go p.waitForValidatorVote(
+				stateCtx,
+				peer,
+				blockHeaderRef,
+				int32(validator.GetVotingPower()),
+				votingPowerAccum,
+			)
 		}
 
 		var confirmedVotes []*storageref.StorageRef
@@ -340,7 +345,13 @@ StateLoop:
 }
 
 // waitForValidatorVote waits for a validator vote from a peer.
-func (p *Proposer) waitForValidatorVote(ctx context.Context, pr *peer.Peer, blockHeaderRef *storageref.StorageRef, power int32, votingPowerAccum chan<- *confirmedVote) {
+func (p *Proposer) waitForValidatorVote(
+	ctx context.Context,
+	pr *peer.Peer,
+	blockHeaderRef *storageref.StorageRef,
+	power int32,
+	votingPowerAccum chan<- *confirmedVote,
+) {
 	le := p.le.WithField("peer", pr.GetPeerID().Pretty())
 	nodeMessages, nodeMessagesCancel := pr.SubscribeMessages()
 	defer nodeMessagesCancel()
