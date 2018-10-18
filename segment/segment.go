@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/aperturerobotics/inca"
 	"github.com/aperturerobotics/inca-go/block"
 	"github.com/aperturerobotics/inca-go/encryption"
 	isegment "github.com/aperturerobotics/inca/segment"
@@ -44,6 +45,16 @@ func (s *Segment) GetSegmentNext() string {
 // GetHeadBlock returns the reference to the head block.
 func (s *Segment) GetHeadBlock() *storageref.StorageRef {
 	return s.state.GetHeadBlock()
+}
+
+// GetTailBlock returns the reference to the tail block.
+func (s *Segment) GetTailBlock() *storageref.StorageRef {
+	return s.state.GetTailBlock()
+}
+
+// GetTailBlockRound returns the reference to the tail round information.
+func (s *Segment) GetTailBlockRound() *inca.BlockRoundInfo {
+	return s.state.GetTailBlockRound()
 }
 
 // dbkey returns the database key of this segment.
@@ -144,6 +155,7 @@ func (s *Segment) RewindOnce(
 	defer func() {
 		s.le.
 			WithField("segment", s.GetId()).
+			WithField("segment-status", s.state.GetStatus().String()).
 			WithField("tail-height", s.state.GetTailBlockRound().String()).
 			WithField("error", retErr).
 			Debug("rewound once")
@@ -316,4 +328,14 @@ func (s *Segment) AppendSegment(
 	}
 
 	return nil
+}
+
+// MarkValid marks the segment as valid.
+func (s *Segment) MarkValid() error {
+	if s.state.Status == isegment.SegmentStatus_SegmentStatus_VALID {
+		return nil
+	}
+
+	s.state.Status = isegment.SegmentStatus_SegmentStatus_VALID
+	return s.writeState(s.ctx)
 }

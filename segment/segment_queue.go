@@ -52,6 +52,10 @@ func (sq *SegmentQueue) Remove(seg *Segment) {
 
 // Pop pops a segment from the queue.
 func (sq *SegmentQueue) Pop() *Segment {
+	if len(sq.pq) == 0 {
+		return nil
+	}
+
 	return heap.Pop(&sq.pq).(*Segment)
 }
 

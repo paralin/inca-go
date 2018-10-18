@@ -186,6 +186,7 @@ func NewChain(
 		ch.GetEncryptionStrategy(),
 		ch.GetBlockValidator(),
 		ch.GetBlockDbm(),
+		ch,
 	)
 
 	conf.EncryptionArgs = argsObjectWrapper
@@ -348,6 +349,7 @@ func FromConfig(
 		ch.GetEncryptionStrategy(),
 		ch.GetBlockValidator(),
 		ch.GetBlockDbm(),
+		ch,
 	)
 	ch.computePubsubTopic()
 
@@ -496,7 +498,6 @@ func (c *Chain) HandleBlockCommit(
 		return err
 	}
 
-	// c.SegmentStore.segmentQueue.Push(seg)
 	_ = seg
 	return nil
 }
@@ -534,6 +535,9 @@ func (c *Chain) readState(ctx context.Context) error {
 func (c *Chain) manageState() {
 	ctx, ctxCancel := context.WithCancel(c.ctx)
 	defer ctxCancel()
+
+	// Segment queue rewind
+	go c.manageSegmentRewind(ctx)
 
 	// Main state update loop
 	lastNextCheckTime := time.Now().Add(time.Second * 5)
@@ -587,6 +591,28 @@ func (c *Chain) manageState() {
 	}
 }
 
+// manageSegmentRewind manages the segment rewind queue.
+func (c *Chain) manageSegmentRewind(ctx context.Context) {
+	for {
+		matchedAny := c.segStore.RewindOnce(
+			ctx,
+			c.GetEncryptionStrategy(),
+			c.GetBlockValidator(),
+			c.GetBlockDbm(),
+		)
+
+		if matchedAny {
+			continue
+		}
+
+		select {
+		case <-time.After(time.Millisecond * 500):
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
 // manageStateOnce manages the state for one round.
 func (c *Chain) manageStateOnce(ctx context.Context) error {
 	// Evaluate current state
@@ -617,8 +643,13 @@ func (c *Chain) manageStateOnce(ctx context.Context) error {
 
 	headBlockRef := seg.GetHeadBlock()
 	headDigest := headBlockRef.GetObjectDigest()
+	headBlock, err := block.GetBlock(c.ctx, c.GetEncryptionStrategy(), c.GetBlockDbm(), headBlockRef)
+	if err != nil {
+		return errors.Wrap(err, "lookup head block")
+	}
+
 	if bytes.Compare(headDigest, c.lastHeadDigest) != 0 {
-		if err := c.setHeadBlock(ctx, headBlockRef); err != nil {
+		if err := c.setHeadBlock(ctx, headBlock); err != nil {
 			return err
 		}
 	}
@@ -633,24 +664,21 @@ func (c *Chain) manageStateOnce(ctx context.Context) error {
 // setHeadBlock updates the head block.
 func (c *Chain) setHeadBlock(
 	ctx context.Context,
-	headBlockRef *storageref.StorageRef,
+	headBlock *block.Block,
 ) error {
-	headBlock, err := block.GetBlock(ctx, c.encStrat, c.dbm, headBlockRef)
-	if err != nil {
-		return err
-	}
 	headBlockHeaderRef := headBlock.GetInnerBlock().GetBlockHeaderRef()
 	headBlockHeader := headBlock.GetHeader()
 
 	now := time.Now()
 	headBlockTs := headBlockHeader.GetBlockTs().ToTime()
 	headStr := headBlockHeader.GetRoundInfo().String()
-	headDigest := headBlockRef.GetObjectDigest()
+	headDigest := headBlock.GetBlockRef().GetObjectDigest()
 	if headStr == "" {
 		headStr = "genesis"
 	}
 	c.le.
 		WithField("head", headStr).
+		WithField("block-segment", headBlock.GetSegmentId()).
 		WithField("block-ipfs-ref", headBlockHeaderRef.GetIpfs().GetReference()).
 		WithField("block-ipfs-ref-type", headBlockHeaderRef.GetIpfs().GetIpfsRefType().String()).
 		WithField("block-time-ago", now.Sub(headBlockTs).String()).
@@ -658,9 +686,12 @@ func (c *Chain) setHeadBlock(
 
 	c.lastBlock = headBlock
 	c.lastBlockHeader = headBlockHeader
-	c.lastBlockRef = headBlockRef
+	c.lastBlockRef = headBlock.GetBlockRef()
 	c.lastHeadDigest = headDigest
 
+	c.state.StateSegment = headBlock.GetSegmentId()
+	c.state.LastHeight = headBlock.GetHeader().GetRoundInfo().GetHeight() + 1
+	c.state.LastRound = 0
 	return c.writeState(ctx)
 }
 
@@ -838,6 +869,97 @@ func (c *Chain) GetEncryptContext(
 	}
 
 	return pbobject.WithEncryptionConf(ctx, &encConf)
+}
+
+// HandleSegmentUpdated handles a segment store update.
+func (c *Chain) HandleSegmentUpdated(seg *segment.Segment) {
+	segStatus := seg.GetStatus()
+	segDisjointed := segStatus == isegment.SegmentStatus_SegmentStatus_DISJOINTED
+	if !segDisjointed || c.GetHeadBlock() != nil {
+		return
+	}
+
+	encStrat := c.GetEncryptionStrategy()
+	blkDbm := c.GetBlockDbm()
+	tailBlock := seg.GetTailBlock()
+	headBlock := seg.GetHeadBlock()
+	tailRound := seg.GetTailBlockRound()
+	tailRoundGenesis := tailRound.GetHeight() == 0
+
+	headBlkObj, err := block.GetBlock(
+		c.ctx,
+		encStrat,
+		blkDbm,
+		headBlock,
+	)
+	if err != nil {
+		c.le.WithError(err).Warn("unable to lookup head block")
+		return
+	}
+
+	tailBlkObj, err := block.GetBlock(
+		c.ctx,
+		encStrat,
+		blkDbm,
+		tailBlock,
+	)
+	if err != nil {
+		c.le.WithError(err).Warn("unable to lookup tail block")
+		return
+	}
+
+	chainConfMatches := tailBlkObj.
+		GetHeader().
+		GetChainConfigRef().
+		Equals(
+			c.GetGenesis().GetInitChainConfigRef(),
+		)
+
+	markAsHead := func() {
+		if err := seg.MarkValid(); err != nil {
+			c.le.WithError(err).Warn("unable to mark segment as valid")
+			return
+		}
+		if err := c.setHeadBlock(c.ctx, headBlkObj); err != nil {
+			c.le.WithError(err).Warn("unable to mark segment as new head block")
+		}
+	}
+
+	// Validate block via reaching genesis block.
+	if tailRoundGenesis {
+		if chainConfMatches {
+			c.le.Info("traversed to genesis block, marking segment as valid")
+			markAsHead()
+		} else {
+			c.le.Info("traversed to invalid block, not marking segment as valid")
+		}
+
+		return
+	}
+
+	// Validate block via same validator set
+	if chainConfMatches {
+		markAsHead()
+		return
+	}
+
+	var initChainConf inca.ChainConfig
+	initChainConfRef := c.GetGenesis().GetInitChainConfigRef()
+	if err := initChainConfRef.FollowRef(c.ctx, nil, &initChainConf, nil); err != nil {
+		c.le.WithError(err).Warn("unable to follow init chain conf ref")
+		return
+	}
+
+	var blkChainConf inca.ChainConfig
+	blkChainConfRef := headBlkObj.GetHeader().GetChainConfigRef()
+	if err := blkChainConfRef.FollowRef(c.ctx, nil, &blkChainConf, nil); err != nil {
+		c.le.WithError(err).Warn("unable to follow block chain conf ref")
+		return
+	}
+
+	if initChainConf.GetValidatorSetRef().Equals(blkChainConf.GetValidatorSetRef()) {
+		markAsHead()
+	}
 }
 
 // triggerStateRecheck triggers a state recheck without blocking.

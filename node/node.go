@@ -30,18 +30,19 @@ type Node struct {
 	ctx context.Context
 	le  *logrus.Entry
 
-	db        db.Db
-	state     NodeState
-	objStore  *objstore.ObjectStore
-	shell     *api.Shell
-	proposer  *chain.Proposer
-	validator *chain.Validator
-	chain     *chain.Chain
-	proc      goprocess.Process
-	initCh    chan chan error
-	privKey   crypto.PrivKey
-	nodeAddr  lpeer.ID
-	peerStore *peer.PeerStore
+	db          db.Db
+	state       NodeState
+	objStore    *objstore.ObjectStore
+	shell       *api.Shell
+	proposer    *chain.Proposer
+	validator   *chain.Validator
+	chain       *chain.Chain
+	proc        goprocess.Process
+	initCh      chan chan error
+	privKey     crypto.PrivKey
+	pubKeyBytes []byte
+	nodeAddr    lpeer.ID
+	peerStore   *peer.PeerStore
 
 	chainSub *api.PubSubSubscription
 	outboxCh chan *inca.NodeMessage
@@ -74,6 +75,11 @@ func NewNode(
 		objStore: objStore,
 		nodeAddr: nodeAddr,
 		outboxCh: make(chan *inca.NodeMessage),
+	}
+
+	n.pubKeyBytes, err = privKey.GetPublic().Bytes()
+	if err != nil {
+		return nil, err
 	}
 
 	n.peerStore = peer.NewPeerStore(
@@ -147,6 +153,7 @@ func (n *Node) SendMessage(
 		InnerRef:       msgInnerRef,
 		Timestamp:      &ts,
 		AppMessageType: appMsgType,
+		PubKey:         n.pubKeyBytes,
 	}
 
 	select {
