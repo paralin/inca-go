@@ -26,8 +26,9 @@ import (
 
 // Peer is an observed remote node.
 type Peer struct {
-	ctx context.Context
-	le  *logrus.Entry
+	nextSubId uint32
+	ctx       context.Context
+	le        *logrus.Entry
 	// db is the inca database
 	db dbm.Db
 	// objStore is the object store
@@ -210,7 +211,12 @@ func (p *Peer) writeState(ctx context.Context) error {
 // ProcessNodePubsubMessage processes an incoming node pubsub message.
 // The message may not be from this peer, it needs to be verfied.
 func (p *Peer) ProcessNodePubsubMessage(msg *inca.ChainPubsubMessage) {
-	p.processIncomingPubsubMessage(msg)
+	if err := p.processIncomingPubsubMessage(msg); err != nil {
+		p.le.
+			WithError(err).
+			WithField("peer-id", msg.GetPeerId()).
+			Warn("dropped message")
+	}
 }
 
 // GetPublicKey returns the peer public key.

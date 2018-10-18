@@ -83,6 +83,7 @@ func TestProposer(t *testing.T) {
 			Timestamp:      &ts,
 			AppMessageType: transaction.TransactionAppMessageID,
 			// GenesisRef: ...,
+			// PubKey: ...
 		}
 		nmRef, _, err := objStore.StoreObject(ctx, txNodeMessage, pbobject.EncryptionConfig{
 			SignerKeys: []crypto.PrivKey{nodePriv},

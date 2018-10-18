@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"testing"
 
-	"github.com/sirupsen/logrus"
 	"github.com/aperturerobotics/inca"
 	"github.com/aperturerobotics/inca-go/db"
 	"github.com/aperturerobotics/inca-go/encryption/convergentimmutable"
@@ -16,6 +15,7 @@ import (
 	"github.com/aperturerobotics/timestamp"
 	api "github.com/ipfs/go-ipfs-api"
 	"github.com/libp2p/go-libp2p-crypto"
+	"github.com/sirupsen/logrus"
 )
 
 // TestPeer tests the Peer interface.
@@ -54,11 +54,14 @@ func TestPeer(t *testing.T) {
 		t.Fatal(err.Error())
 	}
 
+	np, _ := nodePub.Bytes()
+
 	nowTs := timestamp.Now()
 	nodeMessage := &inca.NodeMessage{
 		GenesisRef:  srdigest.NewStorageRefDigest(genesisDigest),
 		Timestamp:   &nowTs,
 		MessageType: inca.NodeMessageType_NodeMessageType_UNKNOWN,
+		PubKey:      np,
 	}
 	if err := p.processIncomingNodeMessage(nodeMessage); err != nil {
 		t.Fatal(err.Error())

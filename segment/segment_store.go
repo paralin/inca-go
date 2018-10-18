@@ -29,6 +29,13 @@ type SegmentStore struct {
 	objStore        *objstore.ObjectStore
 	segmentQueue    *SegmentQueue
 	segmentNotifyCh <-chan *Segment
+	handler         SegmentStoreHandler
+}
+
+// SegmentStoreHandler handles segment store events.
+type SegmentStoreHandler interface {
+	// HandleSegmentUpdated handles a segment update.
+	HandleSegmentUpdated(seg *Segment)
 }
 
 // NewSegmentStore builds a new SegmentStore, with a management goroutine.
@@ -39,14 +46,16 @@ func NewSegmentStore(
 	encStrat encryption.Strategy,
 	blockValidator block.Validator,
 	blockDbm db.Db,
+	handler SegmentStoreHandler,
 ) *SegmentStore {
 	le := logctx.GetLogEntry(ctx)
 	segmentNotifyCh := make(chan *Segment, 5)
 	return &SegmentStore{
 		ctx:             ctx,
 		dbm:             dbm,
-		objStore:        objStore,
 		le:              le,
+		handler:         handler,
+		objStore:        objStore,
 		segmentNotifyCh: segmentNotifyCh,
 		segmentQueue:    NewSegmentQueue(segmentNotifyCh),
 	}
@@ -58,30 +67,34 @@ func (s *SegmentStore) RewindOnce(
 	encStrat encryption.Strategy,
 	blockValidator block.Validator,
 	blockDbm db.Db,
-) {
+) bool {
 	nextSeg := s.segmentQueue.Pop()
 	if nextSeg == nil {
-		return
+		return false
 	}
 
 	if err := nextSeg.RewindOnce(ctx, s, encStrat, blockValidator, blockDbm); err != nil {
 		s.le.WithError(err).Warn("issue rewinding segment")
-		return
+		return false
 	}
 
 	if prevSegID := nextSeg.state.GetSegmentPrev(); prevSegID != "" {
 		prevSeg, err := s.GetSegmentById(ctx, prevSegID)
 		if err != nil {
 			s.le.WithError(err).Warn("issue rewinding parent of segment")
-			return
+			return false
 		}
 
 		nextSeg = prevSeg
 	}
 
-	if nextSeg.state.GetStatus() == isegment.SegmentStatus_SegmentStatus_DISJOINTED {
+	s.callChangedHandler(nextSeg)
+
+	currStatus := nextSeg.state.GetStatus()
+	if currStatus == isegment.SegmentStatus_SegmentStatus_DISJOINTED {
 		s.segmentQueue.Push(nextSeg)
 	}
+	return true
 }
 
 // dbListSegments lists segment IDs in the database.
@@ -169,5 +182,21 @@ func (s *SegmentStore) NewSegment(
 	}
 
 	// return the singleton
-	return s.GetSegmentById(ctx, segmentID)
+	aseg, err := s.GetSegmentById(ctx, segmentID)
+	if err != nil {
+		return nil, err
+	}
+
+	if aseg.GetStatus() == isegment.SegmentStatus_SegmentStatus_DISJOINTED {
+		s.segmentQueue.Push(aseg)
+	}
+
+	return aseg, nil
+}
+
+// callChangedHandler calls the segment changed handler.
+func (s *SegmentStore) callChangedHandler(seg *Segment) {
+	if s.handler != nil {
+		s.handler.HandleSegmentUpdated(seg)
+	}
 }

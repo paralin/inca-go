@@ -171,6 +171,11 @@ func (p *Proposer) makeProposal(ctx context.Context, state *state.ChainStateSnap
 		blockHeaderRef = sr
 	}
 
+	return blockHeaderRef, blockHeader, err
+}
+
+// makeVoe sends the vote for a block.
+func (p *Proposer) makeVote(ctx context.Context, blockHeaderRef *storageref.StorageRef) error {
 	vote := &inca.Vote{BlockHeaderRef: blockHeaderRef}
 	var voteStorageRef *storageref.StorageRef
 	{
@@ -178,18 +183,17 @@ func (p *Proposer) makeProposal(ctx context.Context, state *state.ChainStateSnap
 		subCtx := pbobject.WithEncryptionConf(ctx, &encConf)
 		sr, _, err := p.objStore.StoreObject(subCtx, vote, encConf)
 		if err != nil {
-			return nil, nil, err
+			return err
 		}
 		voteStorageRef = sr
 	}
 
-	err = p.msgSender.SendMessage(
+	return p.msgSender.SendMessage(
 		p.ctx,
 		inca.NodeMessageType_NodeMessageType_VOTE,
 		0,
 		voteStorageRef,
 	)
-	return blockHeaderRef, blockHeader, err
 }
 
 type confirmedVote struct {
@@ -292,13 +296,19 @@ StateLoop:
 			}
 
 			// Wait for the vote from the validator.
-			go p.waitForValidatorVote(
+			// Note: waitForValidatorVote starts a goroutine.
+			p.waitForValidatorVote(
 				stateCtx,
 				peer,
 				blockHeaderRef,
 				int32(validator.GetVotingPower()),
 				votingPowerAccum,
 			)
+		}
+
+		if err := p.makeVote(stateCtx, blockHeaderRef); err != nil {
+			p.le.WithError(err).Error("unable to make vote for own proposal")
+			return err
 		}
 
 		var confirmedVotes []*storageref.StorageRef
@@ -354,37 +364,39 @@ func (p *Proposer) waitForValidatorVote(
 ) {
 	le := p.le.WithField("peer", pr.GetPeerID().Pretty())
 	nodeMessages, nodeMessagesCancel := pr.SubscribeMessages()
-	defer nodeMessagesCancel()
 
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case msg := <-nodeMessages:
-			if msg.GetMessageType() != inca.NodeMessageType_NodeMessageType_VOTE {
-				continue
-			}
-
-			vote := &inca.Vote{}
-			innerRef := msg.GetInnerRef()
-			encConf := p.ch.GetEncryptionStrategy().GetBlockEncryptionConfigWithDigest(innerRef.GetObjectDigest())
-			subCtx := pbobject.WithEncryptionConf(ctx, &encConf)
-			if err := innerRef.FollowRef(subCtx, innerRef.GetObjectDigest(), vote, nil); err != nil {
-				le.WithError(err).Warn("unable to follow inner message ref")
-				continue
-			}
-
-			conf := &confirmedVote{
-				peer:    pr,
-				vote:    vote,
-				power:   power,
-				voteRef: innerRef,
-			}
+	go func() {
+		defer nodeMessagesCancel()
+		for {
 			select {
 			case <-ctx.Done():
-			case votingPowerAccum <- conf:
+				return
+			case msg := <-nodeMessages:
+				if msg.GetMessageType() != inca.NodeMessageType_NodeMessageType_VOTE {
+					continue
+				}
+
+				vote := &inca.Vote{}
+				innerRef := msg.GetInnerRef()
+				encConf := p.ch.GetEncryptionStrategy().GetBlockEncryptionConfigWithDigest(innerRef.GetObjectDigest())
+				subCtx := pbobject.WithEncryptionConf(ctx, &encConf)
+				if err := innerRef.FollowRef(subCtx, innerRef.GetObjectDigest(), vote, nil); err != nil {
+					le.WithError(err).Warn("unable to follow inner message ref")
+					continue
+				}
+
+				conf := &confirmedVote{
+					peer:    pr,
+					vote:    vote,
+					power:   power,
+					voteRef: innerRef,
+				}
+				select {
+				case <-ctx.Done():
+				case votingPowerAccum <- conf:
+				}
+				return
 			}
-			return
 		}
-	}
+	}()
 }
