@@ -7,7 +7,6 @@ import (
 	"github.com/aperturerobotics/inca-go/block"
 	"github.com/aperturerobotics/inca-go/utils/transaction"
 	"github.com/aperturerobotics/inca-go/utils/transaction/mempool"
-	"github.com/aperturerobotics/objstore/db"
 )
 
 // Chat implements the mempool Application interface.

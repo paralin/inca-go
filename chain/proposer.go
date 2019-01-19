@@ -3,25 +3,22 @@ package chain
 import (
 	"bytes"
 	"context"
-	"fmt"
 
+	hblock "github.com/aperturerobotics/hydra/block"
+	"github.com/aperturerobotics/hydra/cid"
+	hobject "github.com/aperturerobotics/hydra/object"
 	"github.com/aperturerobotics/inca"
 	"github.com/aperturerobotics/inca-go/block"
 	"github.com/aperturerobotics/inca-go/chain/state"
-	"github.com/aperturerobotics/inca-go/logctx"
 	"github.com/aperturerobotics/inca-go/peer"
 	ichain "github.com/aperturerobotics/inca/chain"
-	"github.com/aperturerobotics/objstore"
-	"github.com/aperturerobotics/objstore/db"
-	"github.com/aperturerobotics/pbobject"
-	"github.com/aperturerobotics/storageref"
 	"github.com/aperturerobotics/timestamp"
+	"github.com/pkg/errors"
 
+	lpeer "github.com/aperturerobotics/bifrost/peer"
 	"github.com/libp2p/go-libp2p-crypto"
-	lpeer "github.com/libp2p/go-libp2p-peer"
 
 	"github.com/golang/protobuf/proto"
-	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
 
@@ -31,11 +28,10 @@ type Proposer struct {
 	state       ichain.ProposerState
 	ch          *Chain
 	le          *logrus.Entry
-	dbm         db.Db
 	privKey     crypto.PrivKey
 	validatorID lpeer.ID
 	pubKeyBytes []byte
-	objStore    *objstore.ObjectStore
+	store       hobject.ObjectStore
 
 	msgSender Node
 	peerStore *peer.PeerStore
@@ -44,28 +40,28 @@ type Proposer struct {
 // NewProposer builds a new Proposer.
 func NewProposer(
 	ctx context.Context,
+	le *logrus.Entry,
 	privKey crypto.PrivKey,
-	dbm db.Db,
+	store hobject.ObjectStore,
 	ch *Chain,
 	sender Node,
 	peerStore *peer.PeerStore,
 ) (*Proposer, error) {
-	ch.GetBlockValidator()
-	le := logctx.GetLogEntry(ctx).WithField("c", "proposer")
+	le = le.WithField("c", "proposer")
 	pid, err := lpeer.IDFromPrivateKey(privKey)
 	if err != nil {
 		return nil, err
 	}
 
-	dbm = db.WithPrefix(dbm, []byte(fmt.Sprintf("/proposer/%s", pid.Pretty())))
+	store = hobject.NewPrefixer(store, "proposer/"+pid.Pretty()+"/")
 	p := &Proposer{
 		ctx:       ctx,
 		ch:        ch,
 		le:        le,
-		dbm:       dbm,
 		privKey:   privKey,
 		msgSender: sender,
 		peerStore: peerStore,
+		store:     store,
 	}
 	p.pubKeyBytes, err = privKey.GetPublic().Bytes()
 	if err != nil {
@@ -83,11 +79,6 @@ func NewProposer(
 		return nil, err
 	}
 
-	p.objStore = objstore.GetObjStore(ctx)
-	if p.objStore == nil {
-		return nil, errors.New("object store must be specified in ctx")
-	}
-
 	return p, nil
 }
 
@@ -95,7 +86,7 @@ func NewProposer(
 // Note: the state object must be allocated, and the ID set.
 // If the key does not exist nothing happens.
 func (p *Proposer) readState(ctx context.Context) error {
-	dat, datOk, err := p.dbm.Get(ctx, []byte("/state"))
+	dat, datOk, err := p.store.GetObject("state")
 	if err != nil {
 		return err
 	}
@@ -114,11 +105,11 @@ func (p *Proposer) writeState(ctx context.Context) error {
 		return err
 	}
 
-	return p.dbm.Set(ctx, []byte("/state"), dat)
+	return p.store.SetObject("state", dat)
 }
 
 // makeProposal makes a proposal for the given state.
-func (p *Proposer) makeProposal(ctx context.Context, state *state.ChainStateSnapshot) (*storageref.StorageRef, *inca.BlockHeader, error) {
+func (p *Proposer) makeProposal(ctx context.Context, state *state.ChainStateSnapshot) (*cid.BlockRef, *inca.BlockHeader, error) {
 	nowTs := timestamp.Now()
 	blockProposer := p.ch.GetBlockProposer()
 
@@ -127,14 +118,52 @@ func (p *Proposer) makeProposal(ctx context.Context, state *state.ChainStateSnap
 		return nil, nil, nil
 	}
 
+	_, lastBlockCursor := p.ch.rootCursor.BuildTransactionAtRef(nil, state.LastBlockRef)
 	lastBlock, err := block.GetBlock(
 		ctx,
-		p.ch.GetEncryptionStrategy(),
+		lastBlockCursor,
 		p.ch.GetBlockDbm(),
-		state.LastBlockRef,
 	)
 	if err != nil {
 		return nil, nil, err
+	}
+
+	chainConfRef := lastBlock.GetHeader().GetChainConfigRef()
+	chainConfCursor, err := lastBlockCursor.FollowRef(2, chainConfRef)
+	if err != nil {
+		return nil, nil, err
+	}
+	chainConfi, err := chainConfCursor.Unmarshal(func() hblock.Block {
+		return &inca.ChainConfig{}
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	chainConf := chainConfi.(*inca.ChainConfig)
+	vsetRef := chainConf.GetValidatorSetRef()
+	vsetCursor, err := chainConfCursor.FollowRef(2, vsetRef)
+	if err != nil {
+		return nil, nil, err
+	}
+	vseti, err := vsetCursor.Unmarshal(func() hblock.Block {
+		return &inca.ValidatorSet{}
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	vset := vseti.(*inca.ValidatorSet)
+	vsetIndex := -1
+	for vi, validator := range vset.GetValidators() {
+		pubKey, err := crypto.UnmarshalPublicKey(validator.GetPubKey())
+		if err != nil {
+			return nil, nil, err
+		}
+		if bytes.Compare(p.pubKeyBytes, validator.GetPubKey()) == 0 {
+			vsetIndex = vi
+		}
+	}
+	if vsetIndex == -1 {
+		return nil, nil, errors.New("peer id not found in validator set")
 	}
 
 	proposedState, err := blockProposer.ProposeBlock(ctx, lastBlock, state)
@@ -150,44 +179,37 @@ func (p *Proposer) makeProposal(ctx context.Context, state *state.ChainStateSnap
 		GenesisRef:         p.ch.GetGenesisRef(),
 		ChainConfigRef:     state.LastBlockHeader.GetChainConfigRef(),
 		NextChainConfigRef: state.LastBlockHeader.GetChainConfigRef(),
-		LastBlockRef:       state.LastBlockRef,
+		PrevBlockRef:       state.LastBlockRef,
 		RoundInfo: &inca.BlockRoundInfo{
 			Height: state.BlockRoundInfo.GetHeight(),
 			Round:  state.BlockRoundInfo.GetRound(),
 		},
-		BlockTs:    &nowTs,
-		ProposerId: p.validatorID.Pretty(),
-		StateRef:   proposedState,
+		BlockTs:        &nowTs,
+		ValidatorIndex: uint32(vsetIndex),
+		StateRef:       proposedState,
 	}
 
-	var blockHeaderRef *storageref.StorageRef
-	{
-		encConf := p.ch.GetEncryptionStrategy().GetBlockEncryptionConfig()
-		subCtx := pbobject.WithEncryptionConf(ctx, &encConf)
-		sr, _, err := p.objStore.StoreObject(subCtx, blockHeader, encConf)
-		if err != nil {
-			return nil, nil, err
-		}
-		blockHeaderRef = sr
+	tx, blkHeaderCursor := p.ch.rootCursor.BuildTransaction(nil)
+	blkHeaderCursor.SetBlock(blockHeader)
+	eves, blkHeaderCursor, err := tx.Write()
+	if err != nil {
+		return nil, nil, err
 	}
+	blockHeaderRef := eves[len(eves)-1].GetPutBlock().GetBlockCommon().GetBlockRef()
 
 	return blockHeaderRef, blockHeader, err
 }
 
 // makeVoe sends the vote for a block.
-func (p *Proposer) makeVote(ctx context.Context, blockHeaderRef *storageref.StorageRef) error {
+func (p *Proposer) makeVote(ctx context.Context, blockHeaderRef *cid.BlockRef) error {
 	vote := &inca.Vote{BlockHeaderRef: blockHeaderRef}
-	var voteStorageRef *storageref.StorageRef
-	{
-		encConf := p.ch.GetEncryptionStrategy().GetNodeMessageEncryptionConfig(p.privKey)
-		subCtx := pbobject.WithEncryptionConf(ctx, &encConf)
-		sr, _, err := p.objStore.StoreObject(subCtx, vote, encConf)
-		if err != nil {
-			return err
-		}
-		voteStorageRef = sr
+	voteTx, voteCursor := p.ch.rootCursor.BuildTransaction(nil)
+	voteCursor.SetBlock(vote)
+	eves, voteCursor, err := voteTx.Write()
+	if err != nil {
+		return err
 	}
-
+	voteStorageRef := eves[len(eves)-1].GetPutBlock().GetBlockCommon().GetBlockRef()
 	return p.msgSender.SendMessage(
 		p.ctx,
 		inca.NodeMessageType_NodeMessageType_VOTE,
@@ -199,7 +221,7 @@ func (p *Proposer) makeVote(ctx context.Context, blockHeaderRef *storageref.Stor
 type confirmedVote struct {
 	peer    *peer.Peer
 	vote    *inca.Vote
-	voteRef *storageref.StorageRef
+	voteRef *cid.BlockRef
 	power   int32
 }
 
@@ -274,7 +296,7 @@ StateLoop:
 			WithField("height-round", nextState.BlockRoundInfo.String()).
 			WithField("total-voting-power", nextState.TotalVotingPower).
 			WithField("required-voting-power", requiredVotingPower).
-			Info("waiting for votes")
+			Debug("waiting for votes")
 
 		votingPowerAccum := make(chan *confirmedVote)
 		for _, validator := range nextState.ValidatorSet.GetValidators() {
@@ -311,7 +333,7 @@ StateLoop:
 			return err
 		}
 
-		var confirmedVotes []*storageref.StorageRef
+		var confirmedVotes []*cid.BlockRef
 		for {
 			var currVoteStanding int32
 			select {
@@ -329,7 +351,7 @@ StateLoop:
 
 		// Mint the final block
 		blk := &inca.Block{BlockHeaderRef: blockHeaderRef, VoteRefs: confirmedVotes}
-		var blockStorageRef *storageref.StorageRef
+		var blockStorageRef *cid.BlockRef
 		{
 			encConf := p.ch.GetEncryptionStrategy().GetBlockEncryptionConfig()
 			subCtx := pbobject.WithEncryptionConf(stateCtx, &encConf)
@@ -358,7 +380,7 @@ StateLoop:
 func (p *Proposer) waitForValidatorVote(
 	ctx context.Context,
 	pr *peer.Peer,
-	blockHeaderRef *storageref.StorageRef,
+	blockHeaderRef *cid.BlockRef,
 	power int32,
 	votingPowerAccum chan<- *confirmedVote,
 ) {
@@ -378,12 +400,8 @@ func (p *Proposer) waitForValidatorVote(
 
 				vote := &inca.Vote{}
 				innerRef := msg.GetInnerRef()
-				encConf := p.ch.GetEncryptionStrategy().GetBlockEncryptionConfigWithDigest(innerRef.GetObjectDigest())
-				subCtx := pbobject.WithEncryptionConf(ctx, &encConf)
-				if err := innerRef.FollowRef(subCtx, innerRef.GetObjectDigest(), vote, nil); err != nil {
-					le.WithError(err).Warn("unable to follow inner message ref")
-					continue
-				}
+				// innerRef.FollowRef(subCtx, innerRef.GetObjectDigest(), vote
+				// TODO
 
 				conf := &confirmedVote{
 					peer:    pr,

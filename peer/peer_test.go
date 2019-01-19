@@ -5,67 +5,98 @@ import (
 	"crypto/rand"
 	"testing"
 
+	"github.com/aperturerobotics/controllerbus/config"
+	"github.com/aperturerobotics/hydra/block/object"
+	"github.com/aperturerobotics/hydra/block/transform"
+	"github.com/aperturerobotics/hydra/block/transform/chksum"
+	"github.com/aperturerobotics/hydra/block/transform/snappy"
+	"github.com/aperturerobotics/hydra/testbed"
 	"github.com/aperturerobotics/inca"
-	"github.com/aperturerobotics/inca-go/db"
-	"github.com/aperturerobotics/inca-go/encryption/convergentimmutable"
-	"github.com/aperturerobotics/objstore"
-	"github.com/aperturerobotics/objstore/ipfs"
-	"github.com/aperturerobotics/objstore/localdb"
-	srdigest "github.com/aperturerobotics/storageref/digest"
 	"github.com/aperturerobotics/timestamp"
-	api "github.com/ipfs/go-ipfs-api"
 	"github.com/libp2p/go-libp2p-crypto"
 	"github.com/sirupsen/logrus"
 )
 
 // TestPeer tests the Peer interface.
 func TestPeer(t *testing.T) {
-	sh := api.NewLocalShell()
-	if sh == nil {
-		t.Fatal("unable to connect to local ipfs")
-	}
-
-	logger := logrus.New()
-	logger.SetLevel(logrus.DebugLevel)
-	le := logrus.NewEntry(logger)
 	ctx := context.Background()
-	dbm := db.NewInmemDb()
-	localStore := localdb.NewLocalDb(db.WithPrefix(dbm, []byte("/localdb")))
-	remoteStore := ipfs.NewRemoteStore(sh)
-	objStore := objstore.NewObjectStore(ctx, localStore, remoteStore)
+	log := logrus.New()
+	log.SetLevel(logrus.DebugLevel)
+	le := logrus.NewEntry(log)
 
-	genesisDigest, err := localStore.DigestData([]byte("stub"))
+	tb, err := testbed.NewTestbed(ctx, le)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
 
-	nodePriv, nodePub, err := crypto.GenerateEd25519Key(rand.Reader)
+	vol := tb.Volume
+	volID := vol.GetID()
+	t.Log(volID)
+
+	// construct a basic transform config.
+	tconf, err := block_transform.NewConfig([]config.Config{
+		&transform_chksum.Config{},
+		&transform_snappy.Config{},
+	})
 	if err != nil {
 		t.Fatal(err.Error())
 	}
 
-	encStrat, err := convergentimmutable.NewConvergentImmutableStrategy()
+	oc, _, err := object.BuildEmptyCursor(
+		ctx,
+		tb.Bus,
+		tb.Logger,
+		tb.StepFactorySet,
+		testbed.BucketId,
+		volID,
+		tconf,
+		nil,
+	)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
 
-	p, err := NewPeer(ctx, le, dbm, objStore, nodePub, genesisDigest, encStrat)
+	validatorPriv, validatorPub, err := crypto.GenerateEd25519Key(rand.Reader)
+	_ = validatorPriv
 	if err != nil {
 		t.Fatal(err.Error())
 	}
 
-	np, _ := nodePub.Bytes()
+	store, err := tb.Volume.OpenObjectStore(ctx, "test-store")
+	if err != nil {
+		t.Fatal(err.Error())
+	}
 
+	// store dummy genesis object
+	genTx, genCursor := oc.BuildTransaction(nil)
+	genCursor.SetBlock(&inca.Genesis{ChainId: "test"})
+	eves, genCursor, err := genTx.Write()
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+	genesisRef := eves[len(eves)-1].GetPutBlock().GetBlockCommon().GetBlockRef()
+
+	p, err := NewPeer(ctx, le, oc, store, validatorPub, genesisRef, nil)
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+
+	np, _ := validatorPub.Bytes()
 	nowTs := timestamp.Now()
 	nodeMessage := &inca.NodeMessage{
-		GenesisRef:  srdigest.NewStorageRefDigest(genesisDigest),
+		GenesisRef:  genesisRef,
 		Timestamp:   &nowTs,
 		MessageType: inca.NodeMessageType_NodeMessageType_UNKNOWN,
 		PubKey:      np,
 	}
-	if err := p.processIncomingNodeMessage(nodeMessage); err != nil {
+	genCursor.SetBlock(nodeMessage)
+	eves, genCursor, err = genTx.Write()
+	if err != nil {
 		t.Fatal(err.Error())
 	}
-	_ = p
-	_ = nodePriv
+	nmRef := eves[len(eves)-1].GetPutBlock().GetBlockCommon().GetBlockRef()
+	if err := p.processIncomingNodeMessage(nodeMessage, nmRef); err != nil {
+		t.Fatal(err.Error())
+	}
+	_ = nmRef
 }

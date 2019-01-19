@@ -3,14 +3,12 @@ package block
 import (
 	"context"
 	"encoding/base64"
-	"fmt"
 
+	"github.com/aperturerobotics/hydra/block"
+	"github.com/aperturerobotics/hydra/cid"
+	"github.com/aperturerobotics/hydra/object"
 	"github.com/aperturerobotics/inca"
-	"github.com/aperturerobotics/inca-go/encryption"
 	iblock "github.com/aperturerobotics/inca/block"
-	"github.com/aperturerobotics/objstore/db"
-	"github.com/aperturerobotics/pbobject"
-	"github.com/aperturerobotics/storageref"
 	"github.com/golang/protobuf/proto"
 	"github.com/pkg/errors"
 )
@@ -21,73 +19,50 @@ const BlockCommitRatio float32 = 0.66
 // Block is a block header wrapped with some context.
 type Block struct {
 	iblock.State
-	dbm      db.Db
-	blk      *inca.Block
-	header   *inca.BlockHeader
-	encStrat encryption.Strategy
-	blkRef   *storageref.StorageRef
-	id       string
-	dbKey    []byte
-}
-
-// FollowBlockRef follows a reference to a Block object.
-func FollowBlockRef(
-	ctx context.Context,
-	ref *storageref.StorageRef,
-	encStrat encryption.Strategy,
-) (*inca.Block, error) {
-	blk := &inca.Block{}
-	encConf := encStrat.GetBlockEncryptionConfigWithDigest(ref.GetObjectDigest())
-	subCtx := pbobject.WithEncryptionConf(ctx, &encConf)
-	if err := ref.FollowRef(subCtx, ref.GetObjectDigest(), blk, nil); err != nil {
-		return nil, err
-	}
-	return blk, nil
-}
-
-// FollowBlockHeaderRef follows a reference to a BlockHeader object.
-func FollowBlockHeaderRef(
-	ctx context.Context,
-	ref *storageref.StorageRef,
-	encStrat encryption.Strategy,
-) (*inca.BlockHeader, error) {
-	blk := &inca.BlockHeader{}
-	encConf := encStrat.GetBlockEncryptionConfigWithDigest(ref.GetObjectDigest())
-	subCtx := pbobject.WithEncryptionConf(ctx, &encConf)
-	if err := ref.FollowRef(subCtx, ref.GetObjectDigest(), blk, nil); err != nil {
-		return nil, err
-	}
-	return blk, nil
+	//	dbm      db.Db
+	blk          *inca.Block
+	header       *inca.BlockHeader
+	headerCursor *block.Cursor
+	blkRef       *cid.BlockRef
+	id           string
 }
 
 // GetBlock gets the Block object associated with the given Block storage ref.
 func GetBlock(
 	ctx context.Context,
-	encStrat encryption.Strategy,
-	dbm db.Db,
-	blockRef *storageref.StorageRef,
+	cursor *block.Cursor,
+	store object.ObjectStore,
 ) (*Block, error) {
-	blk, err := FollowBlockRef(ctx, blockRef, encStrat)
+	blockRefKey, err := cursor.GetRef().MarshalKey()
 	if err != nil {
 		return nil, err
 	}
-
-	blkHeader, err := FollowBlockHeaderRef(ctx, blk.GetBlockHeaderRef(), encStrat)
+	blki, err := cursor.Unmarshal(func() block.Block { return &inca.Block{} })
 	if err != nil {
 		return nil, err
 	}
+	blk := blki.(*inca.Block)
 
+	blkHeaderCursor, err := cursor.FollowRef(1, blk.GetBlockHeaderRef())
+	if err != nil {
+		return nil, err
+	}
+	blkHeaderi, err := blkHeaderCursor.Unmarshal(func() block.Block {
+		return &inca.BlockHeader{}
+	})
+	blkHeader := blkHeaderi.(*inca.BlockHeader)
+
+	id := base64.StdEncoding.EncodeToString(blockRefKey)
 	b := &Block{
-		id:       base64.StdEncoding.EncodeToString(blockRef.GetObjectDigest()),
-		dbm:      dbm,
-		blk:      blk,
-		encStrat: encStrat,
-		header:   blkHeader,
-		blkRef:   blockRef,
+		id: id,
+		// dbm:      dbm,
+		blk:          blk,
+		header:       blkHeader,
+		blkRef:       cursor.GetRef(),
+		headerCursor: blkHeaderCursor,
 	}
-	b.dbKey = []byte(fmt.Sprintf("/%s", b.id))
 
-	if err := b.ReadState(ctx); err != nil {
+	if err := b.ReadState(store); err != nil {
 		return nil, err
 	}
 
@@ -95,14 +70,14 @@ func GetBlock(
 }
 
 // GetDbKey returns the key of this block.
-func (b *Block) GetDbKey() []byte {
-	return b.dbKey
+func (b *Block) GetDbKey() string {
+	return b.id
 }
 
 // ReadState loads the peer state from the database.
-func (b *Block) ReadState(ctx context.Context) error {
+func (b *Block) ReadState(store object.ObjectStore) error {
 	dbKey := b.GetDbKey()
-	dat, datOk, err := b.dbm.Get(ctx, dbKey)
+	dat, datOk, err := store.GetObject(dbKey)
 	if err != nil || !datOk {
 		return err
 	}
@@ -110,14 +85,14 @@ func (b *Block) ReadState(ctx context.Context) error {
 }
 
 // WriteState writes the last observed state and other parameters to the db.
-func (b *Block) WriteState(ctx context.Context) error {
+func (b *Block) WriteState(store object.ObjectStore) error {
 	dbKey := b.GetDbKey()
 	dat, err := proto.Marshal(&b.State)
 	if err != nil {
 		return err
 	}
 
-	return b.dbm.Set(ctx, dbKey, dat)
+	return store.SetObject(dbKey, dat)
 }
 
 // GetId returns the block Id
@@ -135,18 +110,6 @@ func (b *Block) GetInnerBlock() *inca.Block {
 	return b.blk
 }
 
-func (b *Block) fetchChainConfig(ctx context.Context) (*inca.ChainConfig, error) {
-	chainConf := &inca.ChainConfig{}
-	chainConfRef := b.header.GetChainConfigRef()
-	encConf := b.encStrat.GetBlockEncryptionConfigWithDigest(chainConfRef.GetObjectDigest())
-	subCtx := pbobject.WithEncryptionConf(ctx, &encConf)
-	if err := chainConfRef.FollowRef(subCtx, nil, chainConf, nil); err != nil {
-		return nil, err
-	}
-
-	return chainConf, nil
-}
-
 // ValidateChild checks if a block can be the next in the sequence.
 // TODO: validate timestamps on round
 // Returns markValid, which indicates that the block should be considered valid without a known parent.
@@ -158,7 +121,7 @@ func (b *Block) ValidateChild(
 	bHeader := b.header
 	childHeader := child.header
 
-	if !bHeader.GetGenesisRef().Equals(childHeader.GetGenesisRef()) {
+	if !bHeader.GetGenesisRef().EqualsRef(childHeader.GetGenesisRef()) {
 		return false, errors.New("genesis reference mismatch")
 	}
 
@@ -178,31 +141,41 @@ func (b *Block) ValidateChild(
 		return false, errors.Errorf("child timestamp %s before parent %s", childTs.String(), bTs.String())
 	}
 
-	chainConf, err := b.fetchChainConfig(ctx)
+	chainConfCursor, err := b.headerCursor.FollowRef(2, b.GetHeader().GetChainConfigRef())
 	if err != nil {
 		return false, err
 	}
+	chainConfi, err := chainConfCursor.Unmarshal(func() block.Block { return &inca.ChainConfig{} })
+	if err != nil {
+		return false, err
+	}
+	chainConf := chainConfi.(*inca.ChainConfig)
 
 	// TODO: allow mutataing chain config
-	if !bHeader.GetChainConfigRef().Equals(childHeader.GetChainConfigRef()) {
+	if !bHeader.GetChainConfigRef().EqualsRef(childHeader.GetChainConfigRef()) {
 		return false, errors.New("child chain config does not match parent")
 	}
 
-	if !bHeader.GetChainConfigRef().Equals(childHeader.GetNextChainConfigRef()) {
+	if !bHeader.GetChainConfigRef().EqualsRef(childHeader.GetNextChainConfigRef()) {
 		return false, errors.New("child next chain config does not match parent")
 	}
 
-	valSet := &inca.ValidatorSet{}
-	{
-		encConf := b.encStrat.GetBlockEncryptionConfigWithDigest(chainConf.GetValidatorSetRef().GetObjectDigest())
-		subCtx := pbobject.WithEncryptionConf(ctx, &encConf)
-		if err := chainConf.GetValidatorSetRef().FollowRef(subCtx, nil, valSet, nil); err != nil {
-			return false, err
-		}
+	valSetCursor, err := chainConfCursor.FollowRef(2, chainConf.GetValidatorSetRef())
+	if err != nil {
+		return false, err
 	}
+	valSeti, err := valSetCursor.Unmarshal(func() block.Block { return &inca.ValidatorSet{} })
+	if err != nil {
+		return false, err
+	}
+	valSet := valSeti.(*inca.ValidatorSet)
 
+	brKey, err := b.blkRef.MarshalKey()
+	if err != nil {
+		return false, err
+	}
 	selValidator, _ := valSet.SelectProposer(
-		b.blkRef.GetObjectDigest(),
+		brKey,
 		childRoundInfo.GetHeight(),
 		childRoundInfo.GetRound(),
 	)
@@ -210,14 +183,34 @@ func (b *Block) ValidateChild(
 		return false, errors.New("selected validator was nil")
 	}
 
-	childValidatorID := childHeader.GetProposerId()
+	valSetValidators := valSet.GetValidators()
+	childValidatorIdx := int(childHeader.GetValidatorIndex())
+	if len(valSetValidators) >= childValidatorIdx {
+		return false, errors.Errorf(
+			"previous validator index out of range: %d >= %d",
+			childValidatorIdx,
+			len(valSetValidators),
+		)
+	}
+	childValidator := valSetValidators[childValidatorIdx]
+	childValidatorID, childValidatorPub, err := childValidator.ParsePeerID()
+	if err != nil {
+		return false, errors.Wrap(err, "child validator public key invalid")
+	}
+
 	selValidatorID, _, err := selValidator.ParsePeerID()
 	if err != nil {
 		return false, err
 	}
 
-	if selValidatorID.Pretty() != childValidatorID {
-		return false, errors.Errorf("expected validator for (%d, %d) %s != actual %s", childRoundInfo.GetHeight(), childRoundInfo.GetRound(), selValidatorID.Pretty(), childValidatorID)
+	if !selValidatorID.MatchesPublicKey(childValidatorPub) {
+		return false, errors.Errorf(
+			"expected validator for (%d, %d) %s != actual %s",
+			childRoundInfo.GetHeight(),
+			childRoundInfo.GetRound(),
+			selValidatorID.Pretty(),
+			childValidatorID.Pretty(),
+		)
 	}
 
 	// TODO: decide if this is always required.
@@ -229,11 +222,11 @@ func (b *Block) ValidateChild(
 }
 
 // GetBlockRef returns the block ref.
-func (b *Block) GetBlockRef() *storageref.StorageRef {
+func (b *Block) GetBlockRef() *cid.BlockRef {
 	return b.blkRef
 }
 
 // GetStateRef returns the state ref (shortcut).
-func (b *Block) GetStateRef() *storageref.StorageRef {
+func (b *Block) GetStateRef() *cid.BlockRef {
 	return b.GetHeader().GetStateRef()
 }

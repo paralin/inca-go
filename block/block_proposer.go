@@ -3,8 +3,8 @@ package block
 import (
 	"context"
 
+	"github.com/aperturerobotics/hydra/cid"
 	"github.com/aperturerobotics/inca-go/chain/state"
-	"github.com/aperturerobotics/storageref"
 )
 
 // Proposer may propose blocks at some point during the voting window.
@@ -14,5 +14,5 @@ type Proposer interface {
 		ctx context.Context,
 		parentBlk *Block,
 		chainState *state.ChainStateSnapshot,
-	) (*storageref.StorageRef, error)
+	) (*cid.BlockRef, error)
 }

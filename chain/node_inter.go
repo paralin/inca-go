@@ -3,9 +3,9 @@ package chain
 import (
 	"context"
 
+	"github.com/aperturerobotics/hydra/cid"
 	"github.com/aperturerobotics/inca"
 	"github.com/aperturerobotics/inca-go/peer"
-	"github.com/aperturerobotics/storageref"
 )
 
 // Node interacts with the network.
@@ -15,7 +15,7 @@ type Node interface {
 		ctx context.Context,
 		msgType inca.NodeMessageType,
 		appMsgType uint32,
-		msgInnerRef *storageref.StorageRef,
+		msgInnerRef *cid.BlockRef,
 	) error
 	// GetPeerStore returns the peer store from the node.
 	GetPeerStore() *peer.PeerStore

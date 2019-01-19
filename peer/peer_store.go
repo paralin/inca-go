@@ -4,43 +4,39 @@ import (
 	"context"
 	"sync"
 
-	"github.com/aperturerobotics/inca-go/encryption"
+	lpeer "github.com/aperturerobotics/bifrost/peer"
+	"github.com/aperturerobotics/hydra/block/object"
+	"github.com/aperturerobotics/hydra/cid"
+	dbm "github.com/aperturerobotics/hydra/object"
 	"github.com/aperturerobotics/inca-go/logctx"
-	"github.com/aperturerobotics/objstore"
-	"github.com/aperturerobotics/objstore/db"
-
 	"github.com/libp2p/go-libp2p-crypto"
-	lpeer "github.com/libp2p/go-libp2p-peer"
 )
 
 // PeerStore manages peer objects
 type PeerStore struct {
-	ctx           context.Context
-	db            db.Db
-	peers         sync.Map // map[lpeer.ID]*Peer
-	objStore      *objstore.ObjectStore
-	genesisDigest []byte
-	encStrat      encryption.Strategy
-	handler       PeerHandler
+	ctx        context.Context
+	store      dbm.ObjectStore
+	peers      sync.Map // map[lpeer.ID]*Peer
+	genesisRef *cid.BlockRef
+	handler    PeerHandler
+	rootCursor *object.Cursor
 }
 
 // NewPeerStore builds a new peer store, loading the initial set from the db.
 func NewPeerStore(
 	ctx context.Context,
-	dbm db.Db,
-	objStore *objstore.ObjectStore,
-	genesisDigest []byte,
-	encStrat encryption.Strategy,
+	rootCursor *object.Cursor,
+	store dbm.ObjectStore,
+	genesisRef *cid.BlockRef,
 	handler PeerHandler,
 ) *PeerStore {
-	dbm = db.WithPrefix(dbm, []byte("/peers"))
+	store = dbm.NewPrefixer(store, "peers/")
 	return &PeerStore{
-		ctx:           ctx,
-		db:            dbm,
-		objStore:      objStore,
-		genesisDigest: genesisDigest,
-		encStrat:      encStrat,
-		handler:       handler,
+		ctx:        ctx,
+		store:      store,
+		genesisRef: genesisRef,
+		handler:    handler,
+		rootCursor: rootCursor,
 	}
 }
 
@@ -64,11 +60,10 @@ func (ps *PeerStore) GetPeerWithPubKey(pubKey crypto.PubKey) (*Peer, error) {
 	p, err := NewPeer(
 		ps.ctx,
 		le,
-		ps.db,
-		ps.objStore,
+		ps.rootCursor,
+		ps.store,
 		pubKey,
-		ps.genesisDigest,
-		ps.encStrat,
+		ps.genesisRef,
 		ps.handler,
 	)
 	if err != nil {

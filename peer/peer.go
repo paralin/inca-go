@@ -1,46 +1,40 @@
 package peer
 
 import (
-	"bytes"
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
 	"github.com/aperturerobotics/inca"
 	"github.com/aperturerobotics/inca-go/block"
-	"github.com/aperturerobotics/inca-go/encryption"
 	ipeer "github.com/aperturerobotics/inca/peer"
 
-	"github.com/aperturerobotics/objstore"
-	dbm "github.com/aperturerobotics/objstore/db"
-	"github.com/aperturerobotics/pbobject"
-	"github.com/aperturerobotics/storageref"
+	hblock "github.com/aperturerobotics/hydra/block"
+	"github.com/aperturerobotics/hydra/block/object"
+	"github.com/aperturerobotics/hydra/cid"
+	dbm "github.com/aperturerobotics/hydra/object"
 
+	lpeer "github.com/aperturerobotics/bifrost/peer"
 	"github.com/golang/protobuf/proto"
 	"github.com/libp2p/go-libp2p-crypto"
-	lpeer "github.com/libp2p/go-libp2p-peer"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
 
 // Peer is an observed remote node.
 type Peer struct {
-	nextSubId uint32
-	ctx       context.Context
-	le        *logrus.Entry
-	// db is the inca database
-	db dbm.Db
-	// objStore is the object store
-	objStore *objstore.ObjectStore
+	nextSubId  uint32
+	ctx        context.Context
+	le         *logrus.Entry
+	store      dbm.ObjectStore
+	rootCursor *object.Cursor
 
 	// peerPubKey is the public key of the peer
 	peerPubKey crypto.PubKey
 	peerID     lpeer.ID
 
-	state         ipeer.PeerState
-	genesisDigest []byte
-	encStrat      encryption.Strategy
+	state      ipeer.PeerState
+	genesisRef *cid.BlockRef
 
 	msgSubs sync.Map
 	handler PeerHandler
@@ -49,32 +43,31 @@ type Peer struct {
 // PeerHandler handles peer events.
 type PeerHandler interface {
 	// HandleBlockCommit handles an incoming block.
-	HandleBlockCommit(p *Peer, blockRef *storageref.StorageRef, block *inca.Block) error
+	HandleBlockCommit(p *Peer, blockRef *cid.BlockRef, block *inca.Block) error
+	// HandleAppMessage handles an application node message.
+	HandleAppMessage(p *Peer, nodeMessage *inca.NodeMessage, nodeMessageRef *cid.BlockRef) error
 }
 
 // NewPeer builds a new peer object.
 func NewPeer(
 	ctx context.Context,
 	le *logrus.Entry,
-	db dbm.Db,
-	objStore *objstore.ObjectStore,
+	rootCursor *object.Cursor,
+	store dbm.ObjectStore,
 	pubKey crypto.PubKey,
-	genesisDigest []byte,
-	encStrat encryption.Strategy,
+	genesisRef *cid.BlockRef,
 	handler PeerHandler,
 ) (*Peer, error) {
 	peerID, _ := lpeer.IDFromPublicKey(pubKey)
-	db = dbm.WithPrefix(db, []byte(fmt.Sprintf("/%s", peerID.Pretty())))
 	p := &Peer{
-		ctx:           ctx,
-		le:            le.WithField("peer", peerID.Pretty()),
-		db:            db,
-		peerPubKey:    pubKey,
-		peerID:        peerID,
-		objStore:      objStore,
-		handler:       handler,
-		genesisDigest: genesisDigest,
-		encStrat:      encStrat,
+		ctx:        ctx,
+		le:         le.WithField("peer", peerID.Pretty()),
+		store:      dbm.NewPrefixer(store, peerID.Pretty()+"/"),
+		peerPubKey: pubKey,
+		peerID:     peerID,
+		handler:    handler,
+		rootCursor: rootCursor,
+		genesisRef: genesisRef,
 	}
 	if err := p.readState(ctx); err != nil {
 		return nil, err
@@ -89,49 +82,48 @@ func (p *Peer) processIncomingPubsubMessage(pubsubMsg *inca.ChainPubsubMessage) 
 	}
 
 	msgRef := pubsubMsg.GetNodeMessageRef()
-	if len(msgRef.GetObjectDigest()) == 0 {
+	msgDat, err := msgRef.MarshalKey()
+	if err != nil {
+		return err
+	}
+	if len(msgDat) == 0 {
 		return errors.New("object digest cannot be empty")
 	}
 
-	encConf := p.encStrat.GetNodeMessageEncryptionConfigWithDigest(
-		p.GetPublicKey(),
-		msgRef.GetObjectDigest(),
-	)
-	subCtx := pbobject.WithEncryptionConf(p.ctx, &encConf)
+	_, msgCursor := p.rootCursor.BuildTransactionAtRef(nil, msgRef)
+	nmi, err := msgCursor.Unmarshal(func() hblock.Block {
+		return &inca.NodeMessage{}
+	})
+	nm := nmi.(*inca.NodeMessage)
 
-	nm := &inca.NodeMessage{}
-	if err := msgRef.FollowRef(subCtx, nil, nm, nil); err != nil {
-		return err
-	}
+	/*
+		nmPeerIdStr := nm.GetPeerId()
+		if len(nmPeerIdStr) == 0 {
+			return errors.New("node message has no peer id")
+		}
 
-	nmPubDat := nm.GetPubKey()
-	if len(nmPubDat) == 0 {
-		return errors.New("node message has no public key")
-	}
+		nmPeerId, err := lpeer.IDB58Decode(nmPeerIdStr)
+		if err != nil {
+			return errors.Wrap(err, "parse node message peer id")
+		}
 
-	nmPub, err := crypto.UnmarshalPublicKey(nmPubDat)
-	if err != nil {
-		return errors.Wrap(err, "unmarshal node message public key")
-	}
+		if !nmPeerId.MatchesPublicKey(p.peerPubKey) {
+			peerPubID, _ := lpeer.IDFromPublicKey(p.peerPubKey)
 
-	peerPub := p.GetPublicKey()
-	if !nmPub.Equals(peerPub) {
-		nmPubID, _ := lpeer.IDFromPublicKey(nmPub)
-		peerPubID, _ := lpeer.IDFromPublicKey(peerPub)
+			return errors.Errorf(
+				"node message public key mismatch: %s != %s (expected)",
+				nmPeerId.Pretty(),
+				peerPubID.Pretty(),
+			)
+		}
+	*/
 
-		return errors.Errorf(
-			"node message public key mismatch: %s != %s (expected)",
-			nmPubID.Pretty(),
-			peerPubID.Pretty(),
-		)
-	}
-
-	return p.processIncomingNodeMessage(nm)
+	return p.processIncomingNodeMessage(nm, msgRef)
 }
 
 // processIncomingNodeMessage processes an incoming node message.
-func (p *Peer) processIncomingNodeMessage(nm *inca.NodeMessage) error {
-	if bytes.Compare(nm.GetGenesisRef().GetObjectDigest(), p.genesisDigest) != 0 {
+func (p *Peer) processIncomingNodeMessage(nm *inca.NodeMessage, nmRef *cid.BlockRef) error {
+	if !p.genesisRef.EqualsRef(nm.GetGenesisRef()) {
 		return errors.New("genesis reference mismatch")
 	}
 
@@ -171,14 +163,19 @@ func (p *Peer) processIncomingNodeMessage(nm *inca.NodeMessage) error {
 	}
 
 	if nm.GetMessageType() == inca.NodeMessageType_NodeMessageType_BLOCK_COMMIT {
-		blk, err := block.FollowBlockRef(p.ctx, nm.GetInnerRef(), p.encStrat)
+		_, blkCursor := p.rootCursor.BuildTransactionAtRef(nil, nm.GetInnerRef())
+		blk, err := block.GetBlock(p.ctx, blkCursor, p.store)
 		if err != nil {
 			return err
 		}
 
-		err = p.handler.HandleBlockCommit(p, nm.GetInnerRef(), blk)
+		err = p.handler.HandleBlockCommit(p, nm.GetInnerRef(), blk.GetInnerBlock())
 		if err != nil {
 			le.WithError(err).Warn("block commit handler failed")
+		}
+	} else if nm.GetMessageType() == inca.NodeMessageType_NodeMessageType_APP {
+		if err := p.handler.HandleAppMessage(p, nm, nmRef); err != nil {
+			le.WithError(err).Warn("app message handler failed")
 		}
 	}
 
@@ -188,7 +185,7 @@ func (p *Peer) processIncomingNodeMessage(nm *inca.NodeMessage) error {
 
 // readState loads the peer state from the database.
 func (p *Peer) readState(ctx context.Context) error {
-	dat, datOk, err := p.db.Get(ctx, []byte("/state"))
+	dat, datOk, err := p.store.GetObject("state")
 	if err != nil {
 		return err
 	}
@@ -205,7 +202,7 @@ func (p *Peer) writeState(ctx context.Context) error {
 		return err
 	}
 
-	return p.db.Set(ctx, []byte("/state"), dat)
+	return p.store.SetObject("state", dat)
 }
 
 // ProcessNodePubsubMessage processes an incoming node pubsub message.

@@ -9,13 +9,6 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
-
-	// _ imports all encryption types
-	_ "github.com/aperturerobotics/objectenc/all"
-	// _ imports all storage reference types
-	_ "github.com/aperturerobotics/storageref/all"
-	// _ imports all encryption strategies
-	_ "github.com/aperturerobotics/inca-go/encryption/all"
 )
 
 var createInitNodeConfig bool

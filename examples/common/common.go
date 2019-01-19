@@ -7,31 +7,17 @@ import (
 	"io/ioutil"
 	"os"
 
+	"github.com/aperturerobotics/hydra/cid"
 	"github.com/aperturerobotics/inca-go/block"
 	"github.com/aperturerobotics/inca-go/chain"
 	"github.com/aperturerobotics/inca-go/logctx"
 	"github.com/aperturerobotics/inca-go/node"
-	"github.com/aperturerobotics/inca-go/shell"
 	ichain "github.com/aperturerobotics/inca/chain"
-
-	"github.com/aperturerobotics/objstore"
-	"github.com/aperturerobotics/objstore/db"
-	dbcli "github.com/aperturerobotics/objstore/db/cli"
-	"github.com/aperturerobotics/objstore/ipfs"
-	"github.com/aperturerobotics/objstore/localdb"
-	"github.com/aperturerobotics/storageref"
 
 	"github.com/golang/protobuf/jsonpb"
 	"github.com/libp2p/go-libp2p-crypto"
 	"github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
-
-	// _ imports all encryption types
-	_ "github.com/aperturerobotics/objectenc/all"
-	// _ imports all storage reference types
-	_ "github.com/aperturerobotics/storageref/all"
-	// _ imports all encryption strategies
-	_ "github.com/aperturerobotics/inca-go/encryption/all"
 )
 
 var createInitNodeConfig bool
@@ -89,7 +75,7 @@ func Build(
 	ctx context.Context,
 	proposer block.Proposer,
 	validator block.Validator,
-	buildInitState func(ctx context.Context) (*storageref.StorageRef, error),
+	buildInitState func(ctx context.Context) (*cid.BlockRef, error),
 ) (*Common, error) {
 	le := logctx.GetLogEntry(ctx)
 
@@ -151,7 +137,7 @@ func Build(
 	{
 		if _, err := os.Stat(chainConfigPath); os.IsNotExist(err) {
 			le.Info("minting new blockchain")
-			var initState *storageref.StorageRef
+			var initState *cid.BlockRef
 			if buildInitState != nil {
 				initState, err = buildInitState(ctx)
 				if err != nil {

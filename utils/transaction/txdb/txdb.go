@@ -5,8 +5,6 @@ import (
 
 	"github.com/aperturerobotics/inca"
 	"github.com/aperturerobotics/inca-go/utils/transaction"
-	"github.com/aperturerobotics/objstore/db"
-	"github.com/aperturerobotics/storageref"
 	"github.com/golang/protobuf/proto"
 )
 

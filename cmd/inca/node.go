@@ -12,7 +12,6 @@ import (
 	"github.com/aperturerobotics/inca-go/node"
 	"github.com/aperturerobotics/inca-go/validators"
 	ichain "github.com/aperturerobotics/inca/chain"
-	"github.com/aperturerobotics/objstore"
 	"github.com/golang/protobuf/jsonpb"
 	"github.com/libp2p/go-libp2p-crypto"
 )
@@ -35,10 +34,6 @@ func GetNode() (*node.Node, error) {
 	}
 
 	le := logctx.GetLogEntry(rootContext)
-	sh, err := GetShell()
-	if err != nil {
-		return nil, err
-	}
 
 	db, err := GetObjectStore()
 	if err != nil {
@@ -116,7 +111,7 @@ func GetNode() (*node.Node, error) {
 		return nil, err
 	}
 
-	nod, err := node.NewNode(ctx, dbm, db, sh, ch, nodPriv)
+	nod, err := node.NewNode(ctx, dbm, db, ch, nodPriv)
 	if err != nil {
 		return nil, err
 	}

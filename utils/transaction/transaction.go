@@ -1,17 +1,14 @@
 package transaction
 
 import (
-	"crypto/sha1"
+	"bytes"
 	"encoding/binary"
-	"encoding/hex"
-	"strings"
 
+	"github.com/aperturerobotics/bifrost/hash"
+	lpeer "github.com/aperturerobotics/bifrost/peer"
+	"github.com/aperturerobotics/hydra/cid"
 	"github.com/aperturerobotics/inca"
-	"github.com/aperturerobotics/pbobject"
-	"github.com/aperturerobotics/storageref"
 	"github.com/aperturerobotics/timestamp"
-	"github.com/libp2p/go-libp2p-crypto"
-	lcrypto "github.com/libp2p/go-libp2p-crypto"
 	"github.com/pkg/errors"
 )
 
@@ -20,27 +17,9 @@ type Transaction struct {
 	id string
 
 	nodeMessage    *inca.NodeMessage
-	nodeMessageRef *storageref.StorageRef
-	innerRef       *storageref.StorageRef
+	nodeMessageRef *cid.BlockRef
+	innerRef       *cid.BlockRef
 }
-
-// GetObjectTypeID returns the object type string, used to identify types.
-func (t *Transaction) GetObjectTypeID() *pbobject.ObjectTypeID {
-	return pbobject.NewObjectTypeID("/inca/util/transaction")
-}
-
-// GetObjectTypeID returns the object type string, used to identify types.
-func (t *TransactionSet) GetObjectTypeID() *pbobject.ObjectTypeID {
-	return pbobject.NewObjectTypeID("/inca/util/transaction/set")
-}
-
-// GetObjectTypeID returns the object type string, used to identify types.
-func (s *BlockState) GetObjectTypeID() *pbobject.ObjectTypeID {
-	return pbobject.NewObjectTypeID("/inca/util/transaction/block-state")
-}
-
-// TransactionAppMessageID is the identifier for the app message for a transaction.
-var TransactionAppMessageID = (&Transaction{}).GetObjectTypeID().GetCrc32()
 
 // GetID returns the transaction ID.
 func (t *Transaction) GetID() string {
@@ -53,33 +32,30 @@ func (t *Transaction) GetNodeMessage() *inca.NodeMessage {
 }
 
 // GetInnerRef returns the inner reference.
-func (t *Transaction) GetInnerRef() *storageref.StorageRef {
+func (t *Transaction) GetInnerRef() *cid.BlockRef {
 	return t.nodeMessage.GetInnerRef()
 }
 
 // GetNodeMessageRef returns the node message ref if set by SetNodeMessageRef.
-func (t *Transaction) GetNodeMessageRef() *storageref.StorageRef {
+func (t *Transaction) GetNodeMessageRef() *cid.BlockRef {
 	return t.nodeMessageRef
 }
 
 // SetNodeMessageRef sets the storage ref.
-func (t *Transaction) SetNodeMessageRef(nodeMessageRef *storageref.StorageRef) {
+func (t *Transaction) SetNodeMessageRef(nodeMessageRef *cid.BlockRef) {
 	t.nodeMessageRef = nodeMessageRef
 }
 
 // FromNodeMessage loads a transaction from a node message.
 func FromNodeMessage(
+	peerID lpeer.ID,
 	nodeMessage *inca.NodeMessage,
 ) (*Transaction, error) {
-	nodeKey, err := lcrypto.UnmarshalPublicKey(nodeMessage.GetPubKey())
-	if err != nil {
-		return nil, err
-	}
-
 	if nodeMessage.GetMessageType() != inca.NodeMessageType_NodeMessageType_APP {
 		return nil, errors.New("expected app node message type for transaction")
 	}
 
+	/* TODO
 	if nodeMessage.GetAppMessageType() != TransactionAppMessageID {
 		return nil, errors.Errorf(
 			"expected transaction app message id %d for tx, given: %d",
@@ -87,6 +63,7 @@ func FromNodeMessage(
 			nodeMessage.GetAppMessageType(),
 		)
 	}
+	*/
 
 	timestamp := nodeMessage.GetTimestamp()
 	timestampUnix := timestamp.GetTimeUnixMs()
@@ -94,7 +71,7 @@ func FromNodeMessage(
 		return nil, errors.New("expected timestamped nodemessage for transaction")
 	}
 
-	tid, err := ComputeTxID(nodeMessage.GetTimestamp(), nodeKey)
+	tid, err := ComputeTxID(nodeMessage.GetTimestamp(), peerID)
 	if err != nil {
 		return nil, err
 	}
@@ -107,19 +84,20 @@ func FromNodeMessage(
 }
 
 // ComputeTxID computes a transaction ID from a timestamp and node key.
-func ComputeTxID(messageTimestamp *timestamp.Timestamp, nodeKey crypto.PubKey) (string, error) {
-	h := sha1.New()
+func ComputeTxID(messageTimestamp *timestamp.Timestamp, nodePeerID lpeer.ID) (string, error) {
+	var buf bytes.Buffer
 	unixMs := messageTimestamp.GetTimeUnixMs()
-	if err := binary.Write(h, binary.LittleEndian, unixMs); err != nil {
+	if err := binary.Write(&buf, binary.LittleEndian, unixMs); err != nil {
+		return "", err
+	}
+	keyBytes := []byte(nodePeerID.Pretty())
+	if _, err := (&buf).Write(keyBytes); err != nil {
 		return "", err
 	}
 
-	keyBytes, err := nodeKey.Bytes()
+	h, err := hash.Sum(hash.HashType_HashType_SHA256, (&buf).Bytes())
 	if err != nil {
-		return "", nil
+		return "", err
 	}
-
-	_, _ = h.Write(keyBytes)
-	shaSum := h.Sum(nil)
-	return strings.ToLower(hex.EncodeToString(shaSum)), nil
+	return h.MarshalString(), nil
 }

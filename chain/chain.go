@@ -3,7 +3,6 @@ package chain
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"fmt"
 	"sync"
 	"time"
@@ -11,32 +10,25 @@ import (
 	"github.com/aperturerobotics/inca"
 	"github.com/aperturerobotics/inca-go/block"
 	"github.com/aperturerobotics/inca-go/chain/state"
-	"github.com/aperturerobotics/inca-go/encryption"
-	"github.com/aperturerobotics/inca-go/encryption/convergentimmutable"
-	"github.com/aperturerobotics/inca-go/encryption/impl"
-	"github.com/aperturerobotics/inca-go/logctx"
 	"github.com/aperturerobotics/inca-go/peer"
 	"github.com/aperturerobotics/inca-go/segment"
 	ichain "github.com/aperturerobotics/inca/chain"
 	isegment "github.com/aperturerobotics/inca/segment"
 
-	"github.com/aperturerobotics/objstore"
-	idb "github.com/aperturerobotics/objstore/db"
-
-	"github.com/aperturerobotics/pbobject"
-	"github.com/aperturerobotics/storageref"
+	hblock "github.com/aperturerobotics/hydra/block"
+	"github.com/aperturerobotics/hydra/block/object"
+	"github.com/aperturerobotics/hydra/bucket"
+	"github.com/aperturerobotics/hydra/bucket/event"
+	"github.com/aperturerobotics/hydra/cid"
+	hobject "github.com/aperturerobotics/hydra/object"
 	"github.com/aperturerobotics/timestamp"
 
 	"github.com/golang/protobuf/proto"
 	"github.com/pkg/errors"
-	"github.com/satori/go.uuid"
 	"github.com/sirupsen/logrus"
 
+	lpeer "github.com/aperturerobotics/bifrost/peer"
 	"github.com/libp2p/go-libp2p-crypto"
-	lpeer "github.com/libp2p/go-libp2p-peer"
-
-	// _ enables the IPFS storage ref type
-	_ "github.com/aperturerobotics/storageref/ipfs"
 )
 
 var genesisKey = "/genesis"
@@ -44,11 +36,10 @@ var genesisKey = "/genesis"
 // Chain is an instance of a blockchain.
 type Chain struct {
 	ctx                 context.Context
-	db                  *objstore.ObjectStore
-	dbm                 idb.Db
-	conf                *ichain.Config
+	dbKey               string
+	rootCursor          *object.Cursor
+	store, blockStore   hobject.ObjectStore
 	genesis             *inca.Genesis
-	encStrat            encryption.Strategy
 	le                  *logrus.Entry
 	state               ichain.ChainState
 	recheckStateTrigger chan struct{}
@@ -62,8 +53,9 @@ type Chain struct {
 	lastHeadDigest  []byte
 	lastBlock       *block.Block
 	lastBlockHeader *inca.BlockHeader
-	lastBlockRef    *storageref.StorageRef
+	lastBlockRef    *cid.BlockRef
 	segStore        *segment.SegmentStore
+	genesisRef      *cid.BlockRef
 
 	blockValidator block.Validator
 	blockProposer  block.Proposer
@@ -73,34 +65,22 @@ type Chain struct {
 // committing it.
 func NewChain(
 	ctx context.Context,
-	dbm idb.Db,
-	db *objstore.ObjectStore,
+	le *logrus.Entry,
+	store hobject.ObjectStore,
+	rootCursor *object.Cursor,
+	bkt bucket.Bucket,
 	chainID string,
 	validatorPriv crypto.PrivKey,
 	blockValidator block.Validator,
-	genesisStateRef *storageref.StorageRef,
-) (*Chain, error) {
+	genesisStateRef *cid.BlockRef,
+) (ch *Chain, rerr error) {
+	store = hobject.NewPrefixer(store, fmt.Sprintf("chain/%s/", chainID))
 	if chainID == "" {
 		return nil, errors.New("chain id must be set")
 	}
 
-	le := logctx.GetLogEntry(ctx)
-	if objstore.GetObjStore(ctx) != db {
-		ctx = objstore.WithObjStore(ctx, db)
-	}
-
-	strat, err := convergentimmutable.NewConvergentImmutableStrategy()
-	if err != nil {
-		return nil, err
-	}
-
-	argsObjectWrapper, _, err := strat.BuildArgs()
-	if err != nil {
-		return nil, err
-	}
-
 	validatorPub := validatorPriv.GetPublic()
-	validatorPubBytes, err := validatorPub.Bytes()
+	validatorPubBytes, err := crypto.MarshalPublicKey(validatorPub)
 	if err != nil {
 		return nil, err
 	}
@@ -110,178 +90,163 @@ func NewChain(
 		return nil, err
 	}
 
-	validatorSet := &inca.ValidatorSet{
+	tx, cursor := rootCursor.BuildTransaction(nil)
+	mintTs := timestamp.Now()
+	b, err := crypto.MarshalPublicKey(validatorPub)
+	if err != nil {
+		return nil, err
+	}
+	proposerIdx := 0
+	vsetObj := &inca.ValidatorSet{
 		Validators: []*inca.Validator{
 			&inca.Validator{
-				PubKey:        validatorPubBytes,
+				PubKey:        b,
 				VotingPower:   10,
 				OperationMode: inca.Validator_OperationMode_OPERATING,
 			},
 		},
 	}
-	validatorSetStorageRef, _, err := db.StoreObject(
-		ctx,
-		validatorSet,
-		strat.GetBlockEncryptionConfig(),
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	chainConf := &inca.ChainConfig{
+	chainConfObj := &inca.ChainConfig{
 		TimingConfig: &inca.TimingConfig{
-			MinProposeAfterBlock: 500,
-			RoundLength:          3000,
+			MinProposeAfterBlock: 2000,
+			RoundLength:          500,
 		},
-		ValidatorSetRef: validatorSetStorageRef,
+		// ValidatorSetRef is set by reference.
 	}
-	chainConfStorageRef, _, err := db.StoreObject(
-		ctx,
-		chainConf,
-		strat.GetBlockEncryptionConfig(),
-	)
+	genesisObj := &inca.Genesis{
+		ChainId:   chainID,
+		Timestamp: &mintTs,
+		// InitChainConfigRef is set by reference.
+	}
+	blockHeaderObj := &inca.BlockHeader{
+		// GenesisRef is set by reference.
+		// ChainConfigRef is set by refernece.
+		RoundInfo:      &inca.BlockRoundInfo{},
+		BlockTs:        &mintTs,
+		ValidatorIndex: uint32(proposerIdx),
+		StateRef:       genesisStateRef,
+	}
+	cursor.SetBlock(blockHeaderObj)
+
+	genesisCursor, err := cursor.FollowRef(1, nil)
 	if err != nil {
 		return nil, err
 	}
+	genesisCursor.SetBlock(genesisObj)
+	cursor.SetPreWriteHook(func(b hblock.Block) error {
+		b.(*inca.BlockHeader).ChainConfigRef = genesisObj.GetInitChainConfigRef()
+		return nil
+	})
 
-	genesisTs := timestamp.Now()
-	genesis := &inca.Genesis{
-		ChainId:            chainID,
-		Timestamp:          &genesisTs,
-		EncStrategy:        strat.GetEncryptionStrategyType(),
-		InitChainConfigRef: chainConfStorageRef,
-	}
-
-	genesisStorageRef, _, err := db.StoreObject(
-		ctx,
-		genesis,
-		strat.GetGenesisEncryptionConfig(),
-	)
+	chainConfCursor, err := genesisCursor.FollowRef(3, nil)
 	if err != nil {
 		return nil, err
 	}
+	chainConfCursor.SetBlock(chainConfObj)
 
-	conf := &ichain.Config{
-		GenesisRef:         genesisStorageRef,
-		EncryptionStrategy: strat.GetEncryptionStrategyType(),
-	}
-
-	ch := &Chain{
-		ctx:     ctx,
-		conf:    conf,
-		genesis: genesis,
-		db:      db,
-		dbm:     dbm,
-		le:      le,
-
-		blockValidator:      blockValidator,
-		recheckStateTrigger: make(chan struct{}, 1),
-	}
-	ch.segStore = segment.NewSegmentStore(
-		ctx,
-		idb.WithPrefix(
-			dbm,
-			[]byte(fmt.Sprintf("/chain/%s/segments", ch.genesis.GetChainId()))),
-		db,
-		ch.GetEncryptionStrategy(),
-		ch.GetBlockValidator(),
-		ch.GetBlockDbm(),
-		ch,
-	)
-
-	conf.EncryptionArgs = argsObjectWrapper
-	ch.encStrat = strat
-	ch.computePubsubTopic()
-
-	// build the first block
-	nowTs := timestamp.Now()
-	firstBlockHeaderEncConf := strat.GetBlockEncryptionConfig()
-	firstBlockHeaderEncConf.SignerKeys = []crypto.PrivKey{validatorPriv}
-	firstBlockHeader := &inca.BlockHeader{
-		GenesisRef:         genesisStorageRef,
-		ChainConfigRef:     chainConfStorageRef,
-		NextChainConfigRef: chainConfStorageRef,
-		RoundInfo: &inca.BlockRoundInfo{
-			Height: 0,
-			Round:  0,
-		},
-		BlockTs:    &nowTs,
-		ProposerId: validatorID.Pretty(),
-		StateRef:   genesisStateRef,
-	}
-
-	firstBlockHeaderStorageRef, _, err := db.StoreObject(
-		ctx,
-		firstBlockHeader,
-		firstBlockHeaderEncConf,
-	)
+	validatorSetCursor, err := chainConfCursor.FollowRef(2, nil)
 	if err != nil {
 		return nil, err
 	}
+	validatorSetCursor.SetBlock(vsetObj)
 
-	// build a Vote for the first block
-	firstBlockVoteEncConf := strat.GetNodeMessageEncryptionConfig(validatorPriv)
-	firstBlockVote := &inca.Vote{
-		BlockHeaderRef: firstBlockHeaderStorageRef,
+	// purgeBlocks purges a set of blocks
+	purgeBlocks := func(eves []*bucket_event.Event) {
+		for _, e := range eves {
+			if e.GetEventType() == bucket_event.EventType_EventType_PUT_BLOCK {
+				_ = bkt.RmBlock(e.GetPutBlock().GetBlockCommon().GetBlockRef())
+			}
+		}
 	}
-	firstBlockVoteStorageRef, _, err := db.StoreObject(
-		ctx,
-		firstBlockVote,
-		firstBlockVoteEncConf,
-	)
+
+	// Compute the block header reference
+	blockRefs, cursor, err := tx.Write()
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if rerr != nil {
+			purgeBlocks(blockRefs)
+		}
+	}()
 
-	firstBlock := &inca.Block{
-		BlockHeaderRef: firstBlockHeaderStorageRef,
-		VoteRefs: []*storageref.StorageRef{
-			firstBlockVoteStorageRef,
-		},
-	}
-	firstBlockStorageRef, _, err := db.StoreObject(
-		ctx,
-		firstBlock,
-		firstBlockHeaderEncConf,
-	)
-	if err != nil {
-		return nil, err
-	}
+	blockHeaderRef := blockRefs[len(blockRefs)-1].
+		GetPutBlock().
+		GetBlockCommon().
+		GetBlockRef()
 
-	var firstSegDigest []byte
-	uid, _ := uuid.NewV4()
-	firstSeg := &isegment.SegmentState{
-		Id:        uid.String(),
-		Status:    isegment.SegmentStatus_SegmentStatus_VALID,
-		HeadBlock: firstBlockStorageRef,
-		TailBlock: firstBlockStorageRef,
+	// Sign the block header
+	voteObj := &inca.Vote{
+		// BlockHeaderRef is set by refence.
+		ValidatorIndex: uint32(proposerIdx),
 	}
-	if err := db.LocalStore.StoreLocal(
-		ctx,
-		firstSeg,
-		&firstSegDigest,
-		objstore.StoreParams{},
+	if err := voteObj.SignBlockHeader(
+		validatorPriv,
+		blockHeaderRef,
 	); err != nil {
 		return nil, err
 	}
 
+	blockObj := &inca.Block{
+		BlockHeaderRef: blockHeaderRef,
+	}
+	cursor.SetBlock(blockObj)
+	voteCursor, err := cursor.FollowRef(2, nil)
+	if err != nil {
+		return nil, err
+	}
+	voteCursor.SetBlock(voteObj)
+	rblockRefs, cursor, err := tx.Write()
+	if err != nil {
+		return nil, err
+	}
+	firstBlkRef := rblockRefs[len(rblockRefs)-1].
+		GetPutBlock().
+		GetBlockCommon().
+		GetBlockRef()
+
+	blockStore := hobject.NewPrefixer(store, "blocks/")
+	ch = &Chain{
+		ctx:        ctx,
+		genesis:    genesisObj,
+		store:      store,
+		blockStore: blockStore,
+		le:         le,
+
+		blockValidator:      blockValidator,
+		recheckStateTrigger: make(chan struct{}, 1),
+	}
+
+	ssStore := hobject.NewPrefixer(
+		store,
+		"segments/",
+	)
+	ch.segStore = segment.NewSegmentStore(
+		ctx,
+		ssStore,
+		rootCursor,
+		ch.GetBlockValidator(),
+		ch,
+	)
+	ch.computePubsubTopic()
+
+	_, firstBlkCursor := rootCursor.BuildTransactionAtRef(nil, firstBlkRef)
 	firstBlk, err := block.GetBlock(
 		ctx,
-		ch.encStrat,
+		firstBlkCursor,
 		ch.GetBlockDbm(),
-		firstBlockStorageRef,
 	)
 	if err != nil {
 		return nil, err
 	}
 
-	seg, err := ch.segStore.NewSegment(ctx, firstBlk, firstBlockStorageRef)
+	seg, err := ch.segStore.NewSegment(ctx, firstBlk, firstBlkRef)
 	if err != nil {
 		return nil, err
 	}
 
 	firstBlk.State.SegmentId = seg.GetId()
-	if err := firstBlk.WriteState(ctx); err != nil {
+	if err := firstBlk.WriteState(blockStore); err != nil {
 		return nil, err
 	}
 
@@ -293,10 +258,14 @@ func NewChain(
 		return nil, err
 	}
 
-	ch.lastBlockHeader = firstBlockHeader
-	ch.lastBlockRef = firstBlockStorageRef
+	ch.lastBlockHeader = blockHeaderObj
+	ch.lastBlockRef = firstBlkRef
 	ch.lastBlock = firstBlk
-	ch.lastHeadDigest = firstBlockStorageRef.GetObjectDigest()
+	ch.genesisRef = firstBlk.GetHeader().GetGenesisRef()
+	ch.lastHeadDigest, err = firstBlkRef.MarshalKey()
+	if err != nil {
+		return nil, err
+	}
 
 	go ch.manageState()
 	return ch, nil
@@ -305,50 +274,40 @@ func NewChain(
 // FromConfig loads a blockchain from a config.
 func FromConfig(
 	ctx context.Context,
-	dbm idb.Db,
-	db *objstore.ObjectStore,
-	conf *ichain.Config,
+	le *logrus.Entry,
+	chainID string,
+	store hobject.ObjectStore,
+	bkt bucket.Bucket,
+	rootCursor *object.Cursor,
+	genesisRef *cid.BlockRef,
 	blockValidator block.Validator,
 ) (*Chain, error) {
-	le := logctx.GetLogEntry(ctx)
-	if objstore.GetObjStore(ctx) == nil {
-		ctx = objstore.WithObjStore(ctx, db)
-	}
-
-	encStrat, err := impl.BuildEncryptionStrategy(
-		conf.GetEncryptionStrategy(),
-		conf.GetEncryptionArgs(),
-	)
+	genTx, genCursor := rootCursor.BuildTransactionAtRef(nil, genesisRef)
+	geni, err := genCursor.Unmarshal(func() hblock.Block { return &inca.Genesis{} })
 	if err != nil {
 		return nil, err
 	}
-
-	encConf := encStrat.GetGenesisEncryptionConfigWithDigest(conf.GetGenesisRef().GetObjectDigest())
-	encConfCtx := pbobject.WithEncryptionConf(ctx, &encConf)
-
-	genObj := &inca.Genesis{}
-	if err := conf.GetGenesisRef().FollowRef(encConfCtx, nil, genObj, nil); err != nil {
-		return nil, errors.WithMessage(err, "cannot follow genesis reference")
+	genObj := geni.(*inca.Genesis)
+	if genObj.GetChainId() != chainID {
+		return nil, errors.Errorf("chain id mismatch: %s != %s", chainID, genObj.GetChainId())
 	}
 
+	store = hobject.NewPrefixer(store, fmt.Sprintf("chain/%s/", chainID))
 	ch := &Chain{
-		ctx:                 ctx,
-		conf:                conf,
-		genesis:             genObj,
-		db:                  db,
-		dbm:                 dbm,
-		encStrat:            encStrat,
 		le:                  le,
+		ctx:                 ctx,
+		genesis:             genObj,
+		genesisRef:          genesisRef,
+		store:               store,
+		blockStore:          hobject.NewPrefixer(store, "blocks/"),
 		recheckStateTrigger: make(chan struct{}, 1),
 		blockValidator:      blockValidator,
 	}
 	ch.segStore = segment.NewSegmentStore(
 		ctx,
-		idb.WithPrefix(dbm, []byte(fmt.Sprintf("/chain/%s/segments", ch.genesis.GetChainId()))),
-		db,
-		ch.GetEncryptionStrategy(),
+		hobject.NewPrefixer(store, "segments/"),
+		rootCursor,
 		ch.GetBlockValidator(),
-		ch.GetBlockDbm(),
 		ch,
 	)
 	ch.computePubsubTopic()
@@ -372,19 +331,14 @@ func (c *Chain) GetPubsubTopic() string {
 	return c.pubsubTopic
 }
 
-// GetConfig returns a copy of the chain config.
-func (c *Chain) GetConfig() *ichain.Config {
-	return proto.Clone(c.conf).(*ichain.Config)
-}
-
 // GetGenesis returns a copy of the genesis.
 func (c *Chain) GetGenesis() *inca.Genesis {
 	return proto.Clone(c.genesis).(*inca.Genesis)
 }
 
 // GetGenesisRef returns a copy of the chain genesis reference.
-func (c *Chain) GetGenesisRef() *storageref.StorageRef {
-	return proto.Clone(c.conf.GetGenesisRef()).(*storageref.StorageRef)
+func (c *Chain) GetGenesisRef() *cid.BlockRef {
+	return proto.Clone(c.genesisRef).(*cid.BlockRef)
 }
 
 // GetBlockValidator returns the block validator.
@@ -407,23 +361,22 @@ func (c *Chain) SetBlockProposer(bp block.Proposer) {
 	c.blockProposer = bp
 }
 
-// GetEncryptionStrategy returns the encryption strategy for this chain.
-func (c *Chain) GetEncryptionStrategy() encryption.Strategy {
-	return c.encStrat
-}
-
 // ValidateGenesisRef checks if the genesis references matches our local genesis reference.
-func (c *Chain) ValidateGenesisRef(ref *storageref.StorageRef) error {
-	if !ref.Equals(c.conf.GetGenesisRef()) {
-		return errors.Errorf("genesis references do not match: %s (expected) != %s (actual)", c.conf.GetGenesisRef(), ref)
+func (c *Chain) ValidateGenesisRef(ref *cid.BlockRef) error {
+	if !ref.EqualsRef(c.genesisRef) {
+		return errors.Errorf(
+			"genesis references do not match: %s (expected) != %s (actual)",
+			c.genesisRef.MarshalString(),
+			ref.MarshalString(),
+		)
 	}
 
 	return nil
 }
 
 // GetBlockDbm returns the db used for blocks.
-func (c *Chain) GetBlockDbm() idb.Db {
-	return idb.WithPrefix(c.dbm, []byte("/blocks"))
+func (c *Chain) GetBlockDbm() hobject.ObjectStore {
+	return c.blockStore
 }
 
 // GetHeadBlock returns the current head block.
@@ -434,17 +387,16 @@ func (c *Chain) GetHeadBlock() *block.Block {
 // HandleBlockCommit handles an incoming block commit.
 func (c *Chain) HandleBlockCommit(
 	p *peer.Peer,
-	blkRef *storageref.StorageRef,
+	blkRef *cid.BlockRef,
 	blk *inca.Block,
 ) error {
 	ctx := c.ctx
-	encStrat := c.GetEncryptionStrategy()
 	blkDbm := c.GetBlockDbm()
+	_, blkCursor := c.rootCursor.BuildTransactionAtRef(nil, blkRef)
 	blkObj, err := block.GetBlock(
 		ctx,
-		encStrat,
+		blkCursor,
 		blkDbm,
-		blkRef,
 	)
 	if err != nil {
 		return err
@@ -459,11 +411,17 @@ func (c *Chain) HandleBlockCommit(
 	// Identify the parent of the block.
 	// blkParentRef := blkHeader.GetLastBlockRef()
 	blkHeader := blkObj.GetHeader()
+	lastBlkCursor, err := blkCursor.FollowRef(
+		4,
+		blkHeader.GetPrevBlockRef(),
+	)
+	if err != nil {
+		return err
+	}
 	blkParentObj, err := block.GetBlock(
 		ctx,
-		encStrat,
+		lastBlkCursor,
 		blkDbm,
-		blkHeader.GetLastBlockRef(),
 	)
 	if err != nil {
 		return err
@@ -483,7 +441,6 @@ func (c *Chain) HandleBlockCommit(
 			blkObj,
 			blkParentObj,
 			c.blockValidator,
-			c.GetEncryptionStrategy(),
 		); err != nil {
 			return err
 		}
@@ -502,11 +459,6 @@ func (c *Chain) HandleBlockCommit(
 	return nil
 }
 
-// dbKey returns the database key of this chain's state.
-func (c *Chain) dbKey() []byte {
-	return []byte(fmt.Sprintf("/chain/%s", c.genesis.GetChainId()))
-}
-
 // writeState writes the state to the database.
 func (c *Chain) writeState(ctx context.Context) error {
 	defer c.triggerStateRecheck()
@@ -516,14 +468,16 @@ func (c *Chain) writeState(ctx context.Context) error {
 		return err
 	}
 
-	return c.dbm.Set(ctx, c.dbKey(), dat)
+	return c.store.SetObject(c.dbKey, dat)
 }
+
+var stateKey = "state"
 
 // readState reads the state from the database.
 // Note: the state object must be allocated, and the ID set.
 // If the key does not exist nothing happens.
 func (c *Chain) readState(ctx context.Context) error {
-	dat, datOk, err := c.dbm.Get(ctx, c.dbKey())
+	dat, datOk, err := c.store.GetObject(stateKey)
 	if err != nil || !datOk {
 		return err
 	}
@@ -596,7 +550,6 @@ func (c *Chain) manageSegmentRewind(ctx context.Context) {
 	for {
 		matchedAny := c.segStore.RewindOnce(
 			ctx,
-			c.GetEncryptionStrategy(),
 			c.GetBlockValidator(),
 			c.GetBlockDbm(),
 		)
@@ -642,8 +595,12 @@ func (c *Chain) manageStateOnce(ctx context.Context) error {
 	}
 
 	headBlockRef := seg.GetHeadBlock()
-	headDigest := headBlockRef.GetObjectDigest()
-	headBlock, err := block.GetBlock(c.ctx, c.GetEncryptionStrategy(), c.GetBlockDbm(), headBlockRef)
+	headDigest, err := headBlockRef.MarshalKey()
+	if err != nil {
+		return err
+	}
+	_, headBlockCursor := c.rootCursor.BuildTransactionAtRef(nil, headBlockRef)
+	headBlock, err := block.GetBlock(c.ctx, headBlockCursor, c.GetBlockDbm())
 	if err != nil {
 		return errors.Wrap(err, "lookup head block")
 	}
@@ -672,17 +629,20 @@ func (c *Chain) setHeadBlock(
 	now := time.Now()
 	headBlockTs := headBlockHeader.GetBlockTs().ToTime()
 	headStr := headBlockHeader.GetRoundInfo().String()
-	headDigest := headBlock.GetBlockRef().GetObjectDigest()
+	headDigest, err := headBlock.GetBlockRef().MarshalKey()
+	if err != nil {
+		return err
+	}
 	if headStr == "" {
 		headStr = "genesis"
 	}
 	c.le.
 		WithField("head", headStr).
 		WithField("block-segment", headBlock.GetSegmentId()).
-		WithField("block-ipfs-ref", headBlockHeaderRef.GetIpfs().GetReference()).
-		WithField("block-ipfs-ref-type", headBlockHeaderRef.GetIpfs().GetIpfsRefType().String()).
+		WithField("block-ipfs-ref", headBlockHeaderRef.MarshalString()).
+		WithField("block-ipfs-ref-type", headBlockHeaderRef.MarshalString()).
 		WithField("block-time-ago", now.Sub(headBlockTs).String()).
-		Info("head block updated")
+		Debug("head block updated")
 
 	c.lastBlock = headBlock
 	c.lastBlockHeader = headBlockHeader
@@ -716,20 +676,13 @@ func (c *Chain) computeEmitSnapshot(ctx context.Context) error {
 	}
 	sinceLastBlock := nowTs.Sub(lastBlockTs)
 
-	chainConfig := &inca.ChainConfig{}
-	{
-		subCtx := c.GetEncryptContextWithDigest(
-			ctx,
-			c.lastBlockHeader.GetNextChainConfigRef().GetObjectDigest(),
-			chainConfig,
-		)
-		err := c.lastBlockHeader.
-			GetNextChainConfigRef().
-			FollowRef(subCtx, nil, chainConfig, nil)
-		if err != nil {
-			return err
-		}
+	nextCcRef := c.lastBlockHeader.GetNextChainConfigRef()
+	_, nextCcCursor := c.rootCursor.BuildTransactionAtRef(nil, nextCcRef)
+	chainConfigi, err := nextCcCursor.Unmarshal(func() hblock.Block { return &inca.ChainConfig{} })
+	if err != nil {
+		return err
 	}
+	chainConfig := chainConfigi.(*inca.ChainConfig)
 
 	roundDuration := time.Millisecond * time.Duration(
 		chainConfig.GetTimingConfig().GetRoundLength(),
@@ -764,18 +717,18 @@ func (c *Chain) computeEmitSnapshot(ctx context.Context) error {
 	}
 
 	// Compute current proposer
-	validatorSet := &inca.ValidatorSet{}
-	{
-		subCtx := c.GetEncryptContextWithDigest(
-			ctx,
-			chainConfig.GetValidatorSetRef().GetObjectDigest(),
-			validatorSet,
-		)
-		err := chainConfig.GetValidatorSetRef().FollowRef(subCtx, nil, validatorSet, nil)
-		if err != nil {
-			return err
-		}
+	validatorSetRef := chainConfig.GetValidatorSetRef()
+	validatorSetCursor, err := nextCcCursor.FollowRef(2, validatorSetRef)
+	if err != nil {
+		return err
 	}
+	validatorSeti, err := validatorSetCursor.Unmarshal(
+		func() hblock.Block { return &inca.ValidatorSet{} },
+	)
+	if err != nil {
+		return err
+	}
+	validatorSet := validatorSeti.(*inca.ValidatorSet)
 
 	validatorSet.SortValidators()
 	proposer, powerSum := validatorSet.SelectProposer(
@@ -818,57 +771,10 @@ func (c *Chain) computeEmitSnapshot(ctx context.Context) error {
 	return nil
 }
 
-// GetEncryptContextWithDigest checks the type of obj an returns the encryption strategy ctx.
-func (c *Chain) GetEncryptContextWithDigest(
-	ctx context.Context,
-	digest []byte,
-	obj interface{},
-) context.Context {
-	var encConf pbobject.EncryptionConfig
-	switch obj.(type) {
-	case *inca.ValidatorSet:
-		encConf = c.
-			GetEncryptionStrategy().
-			GetBlockEncryptionConfigWithDigest(digest)
-	case *inca.ChainConfig:
-		encConf = c.
-			GetEncryptionStrategy().
-			GetBlockEncryptionConfigWithDigest(digest)
-	case *inca.BlockHeader:
-		encConf = c.
-			GetEncryptionStrategy().
-			GetBlockEncryptionConfigWithDigest(digest)
-	default:
-		return nil
-	}
-
-	return pbobject.WithEncryptionConf(ctx, &encConf)
-}
-
-// GetEncryptContext checks the type of obj an returns the encryption strategy ctx.
-func (c *Chain) GetEncryptContext(
-	ctx context.Context,
-	obj interface{},
-) context.Context {
-	var encConf pbobject.EncryptionConfig
-	switch obj.(type) {
-	case *inca.ValidatorSet:
-		encConf = c.
-			GetEncryptionStrategy().
-			GetBlockEncryptionConfig()
-	case *inca.ChainConfig:
-		encConf = c.
-			GetEncryptionStrategy().
-			GetBlockEncryptionConfig()
-	case *inca.BlockHeader:
-		encConf = c.
-			GetEncryptionStrategy().
-			GetBlockEncryptionConfig()
-	default:
-		return nil
-	}
-
-	return pbobject.WithEncryptionConf(ctx, &encConf)
+// GetBlock returns a block in the chain.
+func (c *Chain) GetBlock(blockRef *cid.BlockRef) (*block.Block, error) {
+	_, cursor := c.rootCursor.BuildTransactionAtRef(nil, blockRef)
+	return block.GetBlock(c.ctx, cursor, c.blockStore)
 }
 
 // HandleSegmentUpdated handles a segment store update.
@@ -879,29 +785,28 @@ func (c *Chain) HandleSegmentUpdated(seg *segment.Segment) {
 		return
 	}
 
-	encStrat := c.GetEncryptionStrategy()
 	blkDbm := c.GetBlockDbm()
 	tailBlock := seg.GetTailBlock()
 	headBlock := seg.GetHeadBlock()
 	tailRound := seg.GetTailBlockRound()
 	tailRoundGenesis := tailRound.GetHeight() == 0
 
+	_, headBlkCursor := c.rootCursor.BuildTransactionAtRef(nil, headBlock)
 	headBlkObj, err := block.GetBlock(
 		c.ctx,
-		encStrat,
+		headBlkCursor,
 		blkDbm,
-		headBlock,
 	)
 	if err != nil {
 		c.le.WithError(err).Warn("unable to lookup head block")
 		return
 	}
 
+	_, tailBlkCursor := c.rootCursor.BuildTransactionAtRef(nil, tailBlock)
 	tailBlkObj, err := block.GetBlock(
 		c.ctx,
-		encStrat,
+		tailBlkCursor,
 		blkDbm,
-		tailBlock,
 	)
 	if err != nil {
 		c.le.WithError(err).Warn("unable to lookup tail block")
@@ -911,7 +816,7 @@ func (c *Chain) HandleSegmentUpdated(seg *segment.Segment) {
 	chainConfMatches := tailBlkObj.
 		GetHeader().
 		GetChainConfigRef().
-		Equals(
+		EqualsRef(
 			c.GetGenesis().GetInitChainConfigRef(),
 		)
 
@@ -943,21 +848,29 @@ func (c *Chain) HandleSegmentUpdated(seg *segment.Segment) {
 		return
 	}
 
-	var initChainConf inca.ChainConfig
 	initChainConfRef := c.GetGenesis().GetInitChainConfigRef()
-	if err := initChainConfRef.FollowRef(c.ctx, nil, &initChainConf, nil); err != nil {
-		c.le.WithError(err).Warn("unable to follow init chain conf ref")
+	_, initChainConfCursor := c.rootCursor.BuildTransactionAtRef(nil, initChainConfRef)
+	initChainConfi, err := initChainConfCursor.Unmarshal(func() hblock.Block {
+		return &inca.ChainConfig{}
+	})
+	if err != nil {
+		c.le.WithError(err).Warn("cannot fetch initial chain conifg")
 		return
 	}
+	initChainConf := initChainConfi.(*inca.ChainConfig)
 
-	var blkChainConf inca.ChainConfig
 	blkChainConfRef := headBlkObj.GetHeader().GetChainConfigRef()
-	if err := blkChainConfRef.FollowRef(c.ctx, nil, &blkChainConf, nil); err != nil {
-		c.le.WithError(err).Warn("unable to follow block chain conf ref")
+	_, blkChainConfCursor := c.rootCursor.BuildTransactionAtRef(nil, blkChainConfRef)
+	blkChainConfi, err := initChainConfCursor.Unmarshal(func() hblock.Block {
+		return &inca.ChainConfig{}
+	})
+	if err != nil {
+		c.le.WithError(err).Warn("cannot fetch block chain conifg")
 		return
 	}
+	blkChainConf := blkChainConfi.(*inca.ChainConfig)
 
-	if initChainConf.GetValidatorSetRef().Equals(blkChainConf.GetValidatorSetRef()) {
+	if initChainConf.GetValidatorSetRef().EqualsRef(blkChainConf.GetValidatorSetRef()) {
 		markAsHead()
 	}
 }
@@ -971,5 +884,5 @@ func (c *Chain) triggerStateRecheck() {
 }
 
 func (c *Chain) computePubsubTopic() {
-	c.pubsubTopic = base64.StdEncoding.EncodeToString(c.conf.GetGenesisRef().GetObjectDigest())
+	c.pubsubTopic = c.genesisRef.MarshalString()
 }

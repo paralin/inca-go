@@ -2,16 +2,15 @@ package segment
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/aperturerobotics/inca"
 	"github.com/aperturerobotics/inca-go/block"
-	"github.com/aperturerobotics/inca-go/encryption"
 	isegment "github.com/aperturerobotics/inca/segment"
 
-	"github.com/aperturerobotics/objstore"
-	"github.com/aperturerobotics/objstore/db"
-	"github.com/aperturerobotics/storageref"
+	hblock "github.com/aperturerobotics/hydra/block"
+	hobject "github.com/aperturerobotics/hydra/block/object"
+	"github.com/aperturerobotics/hydra/cid"
+	"github.com/aperturerobotics/hydra/object"
 
 	"github.com/golang/protobuf/proto"
 	"github.com/pkg/errors"
@@ -20,11 +19,11 @@ import (
 
 // Segment is an instance of a connected or disconnected segment of the blockchain.
 type Segment struct {
-	state isegment.SegmentState
-	ctx   context.Context       // Ctx is canceled when the segment is removed from memory
-	db    *objstore.ObjectStore // Db is the object store
-	dbm   db.Db                 // Dbm is the local key/value store
-	le    *logrus.Entry         // le is the logger
+	state      isegment.SegmentState
+	ctx        context.Context // Ctx is canceled when the segment is removed from memory
+	store      object.ObjectStore
+	rootCursor *hobject.Cursor
+	le         *logrus.Entry
 }
 
 // GetId returns the identifier of this segment.
@@ -43,12 +42,12 @@ func (s *Segment) GetSegmentNext() string {
 }
 
 // GetHeadBlock returns the reference to the head block.
-func (s *Segment) GetHeadBlock() *storageref.StorageRef {
+func (s *Segment) GetHeadBlock() *cid.BlockRef {
 	return s.state.GetHeadBlock()
 }
 
 // GetTailBlock returns the reference to the tail block.
-func (s *Segment) GetTailBlock() *storageref.StorageRef {
+func (s *Segment) GetTailBlock() *cid.BlockRef {
 	return s.state.GetTailBlock()
 }
 
@@ -58,8 +57,8 @@ func (s *Segment) GetTailBlockRound() *inca.BlockRoundInfo {
 }
 
 // dbkey returns the database key of this segment.
-func (s *Segment) dbKey() []byte {
-	return []byte(fmt.Sprintf("/%s", s.state.GetId()))
+func (s *Segment) dbKey() string {
+	return s.state.GetId()
 }
 
 // writeState writes the state to the database.
@@ -69,14 +68,14 @@ func (s *Segment) writeState(ctx context.Context) error {
 		return err
 	}
 
-	return s.dbm.Set(ctx, s.dbKey(), dat)
+	return s.store.SetObject(s.dbKey(), dat)
 }
 
 // readState reads the state from the database.
 // Note: the state object must be allocated, and the ID set.
 // If the key does not exist nothing happens.
 func (s *Segment) readState(ctx context.Context) error {
-	dat, datOk, err := s.dbm.Get(ctx, s.dbKey())
+	dat, datOk, err := s.store.GetObject(s.dbKey())
 	if err != nil || !datOk {
 		return err
 	}
@@ -87,20 +86,25 @@ func (s *Segment) readState(ctx context.Context) error {
 // AppendBlock attempts to append a block to the segment.
 func (s *Segment) AppendBlock(
 	ctx context.Context,
-	blkRef *storageref.StorageRef,
+	blkRef *cid.BlockRef,
 	blk *block.Block,
 	blkParent *block.Block,
 	blkValidator block.Validator,
-	encStrat encryption.Strategy,
 ) error {
+	_, bcursor := s.rootCursor.BuildTransaction(nil)
 	blkParentNextRef := blkParent.GetNextBlock()
 	if blkParentNextRef != nil {
-		blkParentNext, err := block.FollowBlockRef(ctx, blkParentNextRef, encStrat)
+		blkParentNextCursor, err := bcursor.FollowRef(0, blkParentNextRef)
 		if err != nil {
 			return err
 		}
+		blkParentNexti, err := blkParentNextCursor.Unmarshal(func() hblock.Block { return &inca.Block{} })
+		if err != nil {
+			return err
+		}
+		blkParentNext := blkParentNexti.(*inca.Block)
 
-		if !blkParentNext.BlockHeaderRef.Equals(blk.GetInnerBlock().GetBlockHeaderRef()) {
+		if !blkParentNext.GetBlockHeaderRef().EqualsRef(blk.GetInnerBlock().GetBlockHeaderRef()) {
 			// TODO: resolve fork choice
 			return errors.Errorf("fork: block A: %s and B: %s", blk.GetId(), blkParent.GetId())
 		}
@@ -119,12 +123,12 @@ func (s *Segment) AppendBlock(
 	}
 
 	blkParent.NextBlock = blkRef
-	if err := blkParent.WriteState(ctx); err != nil {
+	if err := blkParent.WriteState(s.store); err != nil {
 		return err
 	}
 
 	blk.SegmentId = blkParent.SegmentId
-	if err := blk.WriteState(ctx); err != nil {
+	if err := blk.WriteState(s.store); err != nil {
 		return err
 	}
 
@@ -144,9 +148,8 @@ func (s *Segment) AppendBlock(
 func (s *Segment) RewindOnce(
 	ctx context.Context,
 	segStore *SegmentStore,
-	encStrat encryption.Strategy,
 	blockValidator block.Validator,
-	blockDbm db.Db,
+	blockDbm object.ObjectStore,
 ) (retErr error) {
 	if s.state.GetStatus() != isegment.SegmentStatus_SegmentStatus_DISJOINTED {
 		return nil
@@ -162,32 +165,22 @@ func (s *Segment) RewindOnce(
 	}()
 
 	tailRef := s.state.GetTailBlock()
-	tailBlk, err := block.FollowBlockRef(ctx, tailRef, encStrat)
+	_, tailBlkCursor := s.rootCursor.BuildTransactionAtRef(nil, tailRef)
+	tailBlk, err := block.GetBlock(ctx, tailBlkCursor, blockDbm)
 	if err != nil {
 		return err
 	}
 
-	tailBlkObj, err := block.GetBlock(
-		ctx,
-		encStrat,
-		blockDbm,
-		tailRef,
-	)
+	tailBlkHeader := tailBlk.GetHeader()
+	prevBlockRef := tailBlkHeader.GetPrevBlockRef()
+	prevBlkCursor, err := tailBlkCursor.FollowRef(4, prevBlockRef)
 	if err != nil {
 		return err
 	}
-
-	tailBlkHeader, err := block.FollowBlockHeaderRef(ctx, tailBlk.GetBlockHeaderRef(), encStrat)
-	if err != nil {
-		return err
-	}
-
-	prevBlockRef := tailBlkHeader.GetLastBlockRef()
 	prevBlk, err := block.GetBlock(
 		ctx,
-		encStrat,
+		prevBlkCursor,
 		blockDbm,
-		prevBlockRef,
 	)
 	if err != nil {
 		return err
@@ -207,7 +200,6 @@ func (s *Segment) RewindOnce(
 		return prevSegment.AppendSegment(
 			ctx,
 			s,
-			encStrat,
 			blockValidator,
 			blockDbm,
 		)
@@ -215,15 +207,15 @@ func (s *Segment) RewindOnce(
 
 	// Include in this segment
 	prevBlk.SegmentId = s.GetId()
-	prevBlk.NextBlock = tailBlkObj.GetBlockRef()
-	if err := prevBlk.WriteState(ctx); err != nil {
+	prevBlk.NextBlock = tailBlk.GetBlockRef()
+	if err := prevBlk.WriteState(blockDbm); err != nil {
 		return err
 	}
 
 	s.state.TailBlock = prevBlockRef
 	s.state.TailBlockRound = prevBlk.GetHeader().GetRoundInfo()
 
-	isValid, err := prevBlk.ValidateChild(ctx, tailBlkObj, blockValidator)
+	isValid, err := prevBlk.ValidateChild(ctx, tailBlk, blockValidator)
 	if err != nil {
 		s.le.WithError(err).Warn("segment rewound to invalid block, marking as invalid")
 		s.state.Status = isegment.SegmentStatus_SegmentStatus_INVALID
@@ -270,31 +262,30 @@ func (s *Segment) RewindOnce(
 func (s *Segment) AppendSegment(
 	ctx context.Context,
 	segNext *Segment,
-	encStrat encryption.Strategy,
 	blockValidator block.Validator,
-	blockDbm db.Db,
+	blockDbm object.ObjectStore,
 ) error {
 	if segNext.state.GetStatus() != isegment.SegmentStatus_SegmentStatus_DISJOINTED {
 		return errors.Errorf("unexpected status: %v", segNext.state.GetStatus())
 	}
 
 	tailRef := segNext.state.GetTailBlock()
+	_, tailCursor := s.rootCursor.BuildTransactionAtRef(nil, tailRef)
 	tailBlk, err := block.GetBlock(
 		ctx,
-		encStrat,
+		tailCursor,
 		blockDbm,
-		tailRef,
 	)
 	if err != nil {
 		return err
 	}
 
 	sHeadRef := s.state.GetHeadBlock()
+	_, headCursor := s.rootCursor.BuildTransactionAtRef(nil, sHeadRef)
 	sHeadBlk, err := block.GetBlock(
 		ctx,
-		encStrat,
+		headCursor,
 		blockDbm,
-		sHeadRef,
 	)
 	if err != nil {
 		return err

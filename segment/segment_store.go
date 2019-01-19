@@ -8,13 +8,12 @@ import (
 	"sync"
 
 	"github.com/aperturerobotics/inca-go/block"
-	"github.com/aperturerobotics/inca-go/encryption"
 	"github.com/aperturerobotics/inca-go/logctx"
 	isegment "github.com/aperturerobotics/inca/segment"
 
-	"github.com/aperturerobotics/objstore"
-	"github.com/aperturerobotics/objstore/db"
-	"github.com/aperturerobotics/storageref"
+	hobject "github.com/aperturerobotics/hydra/block/object"
+	"github.com/aperturerobotics/hydra/cid"
+	"github.com/aperturerobotics/hydra/object"
 
 	"github.com/satori/go.uuid"
 	"github.com/sirupsen/logrus"
@@ -25,8 +24,8 @@ type SegmentStore struct {
 	ctx             context.Context
 	le              *logrus.Entry
 	segmentMap      sync.Map // map[string]*Segment (by id)
-	dbm             db.Db
-	objStore        *objstore.ObjectStore
+	store           object.ObjectStore
+	rootCursor      *hobject.Cursor
 	segmentQueue    *SegmentQueue
 	segmentNotifyCh <-chan *Segment
 	handler         SegmentStoreHandler
@@ -41,21 +40,19 @@ type SegmentStoreHandler interface {
 // NewSegmentStore builds a new SegmentStore, with a management goroutine.
 func NewSegmentStore(
 	ctx context.Context,
-	dbm db.Db,
-	objStore *objstore.ObjectStore,
-	encStrat encryption.Strategy,
+	store object.ObjectStore,
+	rootCursor *hobject.Cursor,
 	blockValidator block.Validator,
-	blockDbm db.Db,
 	handler SegmentStoreHandler,
 ) *SegmentStore {
 	le := logctx.GetLogEntry(ctx)
 	segmentNotifyCh := make(chan *Segment, 5)
 	return &SegmentStore{
 		ctx:             ctx,
-		dbm:             dbm,
 		le:              le,
+		store:           store,
+		rootCursor:      rootCursor,
 		handler:         handler,
-		objStore:        objStore,
 		segmentNotifyCh: segmentNotifyCh,
 		segmentQueue:    NewSegmentQueue(segmentNotifyCh),
 	}
@@ -64,16 +61,15 @@ func NewSegmentStore(
 // RewindOnce rewinds the highest priority segment by one.
 func (s *SegmentStore) RewindOnce(
 	ctx context.Context,
-	encStrat encryption.Strategy,
 	blockValidator block.Validator,
-	blockDbm db.Db,
+	blockDbm object.ObjectStore,
 ) bool {
 	nextSeg := s.segmentQueue.Pop()
 	if nextSeg == nil {
 		return false
 	}
 
-	if err := nextSeg.RewindOnce(ctx, s, encStrat, blockValidator, blockDbm); err != nil {
+	if err := nextSeg.RewindOnce(ctx, s, blockValidator, blockDbm); err != nil {
 		s.le.WithError(err).Warn("issue rewinding segment")
 		return false
 	}
@@ -99,7 +95,7 @@ func (s *SegmentStore) RewindOnce(
 
 // dbListSegments lists segment IDs in the database.
 func (s *SegmentStore) dbListSegments(ctx context.Context) ([]string, error) {
-	keys, err := s.dbm.List(ctx, nil)
+	keys, err := s.store.ListKeys("")
 	if err != nil {
 		return nil, err
 	}
@@ -122,10 +118,10 @@ func (s *SegmentStore) GetSegmentById(ctx context.Context, id string) (*Segment,
 
 	le := logctx.GetLogEntry(ctx)
 	seg := &Segment{
-		ctx: ctx,
-		db:  s.objStore,
-		dbm: s.dbm,
-		le:  le,
+		ctx:        ctx,
+		rootCursor: s.rootCursor,
+		store:      s.store,
+		le:         le,
 	}
 
 	seg.state.Id = id
@@ -155,16 +151,16 @@ func (s *SegmentStore) GetDigestKey(hash []byte) []byte {
 func (s *SegmentStore) NewSegment(
 	ctx context.Context,
 	blk *block.Block,
-	blkRef *storageref.StorageRef,
+	blkRef *cid.BlockRef,
 ) (*Segment, error) {
 	uid, _ := uuid.NewV4()
 	segmentID := uid.String()
 	le := logctx.GetLogEntry(ctx)
 	seg := &Segment{
-		ctx: ctx,
-		db:  s.objStore,
-		dbm: s.dbm,
-		le:  le,
+		ctx:        ctx,
+		store:      s.store,
+		rootCursor: s.rootCursor,
+		le:         le,
 	}
 
 	seg.state.Id = segmentID
@@ -177,7 +173,7 @@ func (s *SegmentStore) NewSegment(
 	}
 
 	blk.State.SegmentId = segmentID
-	if err := blk.WriteState(ctx); err != nil {
+	if err := blk.WriteState(s.store); err != nil {
 		return nil, err
 	}
 

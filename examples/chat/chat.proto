@@ -1,11 +1,36 @@
 syntax = "proto3";
 package main;
 
+import "github.com/aperturerobotics/hydra/cid/cid.proto";
+
 // ChatState is the application state.
 message ChatState {
+  // MessageCount is the total message count.
   uint32 message_count = 1;
+  // LastMessageRef is the latest message reference.
+  // Reference type: ChatMessageElem
+  cid.BlockRef last_message_ref = 2;
+}
+
+// ChatMessageElem is the chain of chat messages.
+message ChatMessageElem {
+  // ChatMessage is the chat message.
+  ChatMessage chat_message = 1;
+  // Prev is a reference to the previous element.
+  cid.BlockRef prev = 2;
 }
 
 // ChatTransaction is a chat transaction.
 message ChatTransaction {
+  // ChatMessage is the chat message.
+  ChatMessage chat_message = 1;
+}
+
+// ChatMessage is a chat message.
+message ChatMessage {
+  // SenderName is the sender display name.
+  // This is not a secure chat system, just a proof-of-concept.
+  string sender_name = 1;
+  // MessageText is the sender message text.
+  string message_text = 2;
 }

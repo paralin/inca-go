@@ -11,17 +11,14 @@ import (
 	"github.com/aperturerobotics/inca-go/logctx"
 	"github.com/aperturerobotics/inca-go/peer"
 
-	"github.com/aperturerobotics/objstore"
-	"github.com/aperturerobotics/objstore/db"
-	"github.com/aperturerobotics/pbobject"
-	"github.com/aperturerobotics/storageref"
+	"github.com/aperturerobotics/hydra/cid"
 	"github.com/aperturerobotics/timestamp"
 
+	lpeer "github.com/aperturerobotics/bifrost/peer"
 	"github.com/golang/protobuf/proto"
 	api "github.com/ipfs/go-ipfs-api"
 	"github.com/jbenet/goprocess"
 	"github.com/libp2p/go-libp2p-crypto"
-	lpeer "github.com/libp2p/go-libp2p-peer"
 	"github.com/sirupsen/logrus"
 )
 
@@ -30,19 +27,20 @@ type Node struct {
 	ctx context.Context
 	le  *logrus.Entry
 
-	db          db.Db
-	state       NodeState
-	objStore    *objstore.ObjectStore
-	shell       *api.Shell
-	proposer    *chain.Proposer
-	validator   *chain.Validator
-	chain       *chain.Chain
-	proc        goprocess.Process
-	initCh      chan chan error
-	privKey     crypto.PrivKey
-	pubKeyBytes []byte
-	nodeAddr    lpeer.ID
-	peerStore   *peer.PeerStore
+	db             db.Db
+	state          NodeState
+	objStore       *objstore.ObjectStore
+	shell          *api.Shell
+	proposer       *chain.Proposer
+	validator      *chain.Validator
+	chain          *chain.Chain
+	proc           goprocess.Process
+	initCh         chan chan error
+	privKey        crypto.PrivKey
+	pubKeyBytes    []byte
+	nodeAddr       lpeer.ID
+	nodeAddrPretty string
+	peerStore      *peer.PeerStore
 
 	chainSub *api.PubSubSubscription
 	outboxCh chan *inca.NodeMessage
@@ -54,7 +52,6 @@ func NewNode(
 	ctx context.Context,
 	dbm db.Db,
 	objStore *objstore.ObjectStore,
-	shell *api.Shell,
 	ch *chain.Chain,
 	privKey crypto.PrivKey,
 ) (*Node, error) {
@@ -66,15 +63,15 @@ func NewNode(
 	}
 
 	n := &Node{
-		ctx:      ctx,
-		shell:    shell,
-		le:       le,
-		chain:    ch,
-		db:       db.WithPrefix(dbm, []byte(fmt.Sprintf("/node/%s", nodeAddr.Pretty()))),
-		privKey:  privKey,
-		objStore: objStore,
-		nodeAddr: nodeAddr,
-		outboxCh: make(chan *inca.NodeMessage),
+		ctx:            ctx,
+		le:             le,
+		chain:          ch,
+		db:             db.WithPrefix(dbm, []byte(fmt.Sprintf("/node/%s", nodeAddr.Pretty()))),
+		privKey:        privKey,
+		objStore:       objStore,
+		nodeAddr:       nodeAddr,
+		nodeAddrPretty: nodeAddr.Pretty(),
+		outboxCh:       make(chan *inca.NodeMessage),
 	}
 
 	n.pubKeyBytes, err = privKey.GetPublic().Bytes()
@@ -88,7 +85,7 @@ func NewNode(
 		objStore,
 		genesisRef.GetObjectDigest(),
 		ch.GetEncryptionStrategy(),
-		n.chain,
+		n,
 	)
 
 	n.proposer, err = chain.NewProposer(ctx, privKey, dbm, ch, n, n.peerStore)
@@ -123,6 +120,16 @@ func NewNode(
 	return n, nil
 }
 
+// GetAddr returns the node address.
+func (n *Node) GetAddr() lpeer.ID {
+	return n.nodeAddr
+}
+
+// GetAddrPretty returns the node address formatted to a string.
+func (n *Node) GetAddrPretty() string {
+	return n.nodeAddrPretty
+}
+
 // GetProcess returns the process.
 func (n *Node) GetProcess() goprocess.Process {
 	return n.proc
@@ -143,7 +150,7 @@ func (n *Node) SendMessage(
 	ctx context.Context,
 	msgType inca.NodeMessageType,
 	appMsgType uint32,
-	msgInnerRef *storageref.StorageRef,
+	msgInnerRef *cid.BlockRef,
 ) error {
 	// Build the NodeMessage object
 	ts := timestamp.Now()
@@ -162,6 +169,11 @@ func (n *Node) SendMessage(
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// GetPrivKey returns the node's private key.
+func (n *Node) GetPrivKey() crypto.PrivKey {
+	return n.privKey
 }
 
 // readGenesisState attempts to follow the genesis block references.
@@ -255,7 +267,7 @@ func (n *Node) pubsubSendMsg(msg *inca.NodeMessage) error {
 
 	pubSubMsg := &inca.ChainPubsubMessage{
 		NodeMessageRef: msgSref,
-		PeerId:         n.nodeAddr.Pretty(),
+		PeerId:         n.nodeAddrPretty,
 	}
 
 	dat, err := proto.Marshal(pubSubMsg)
@@ -268,12 +280,17 @@ func (n *Node) pubsubSendMsg(msg *inca.NodeMessage) error {
 		return err
 	}
 
-	datb64 := base64.StdEncoding.EncodeToString(dat)
-	if err := n.shell.PubSubPublish(n.chain.GetPubsubTopic(), datb64); err != nil {
-		return err
-	}
+	// datb64 := base64.StdEncoding.EncodeToString(dat)
+	_ = dat
+	/*
+		if err := n.shell.PubSubPublish(n.chain.GetPubsubTopic(), datb64); err != nil {
+			return err
+		}
+	*/
 
-	n.le.WithField("msg-type", msg.GetMessageType().String()).Debug("sent node message")
+	n.le.
+		WithField("msg-type", msg.GetMessageType().String()).
+		Debug("TODO - would have sent node message")
 	return nil
 }
 
@@ -317,10 +334,32 @@ func (n *Node) processPubSub() error {
 	}
 }
 
+// HandleBlockCommit handles an incoming block.
+func (n *Node) HandleBlockCommit(
+	p *peer.Peer,
+	blockRef *cid.BlockRef,
+	block *inca.Block,
+) error {
+	return n.chain.HandleBlockCommit(p, blockRef, block)
+}
+
+// HandleAppMessage handles an application node message.
+func (n *Node) HandleAppMessage(
+	p *peer.Peer,
+	nodeMessage *inca.NodeMessage,
+	nodeMessageRef *cid.BlockRef,
+) error {
+	n.le.
+		WithField("peer", p.GetPeerID().Pretty()).
+		WithField("message", nodeMessage.GetAppMessageType()).
+		Debug("handled app message")
+	return nil
+}
+
 // processNode is the inner process loop for the node.
 func (n *Node) processNode(proc goprocess.Process) {
 	ctx := n.ctx
-	n.le.WithField("addr", n.nodeAddr.Pretty()).Info("node running")
+	n.le.WithField("addr", n.nodeAddrPretty).Info("node running")
 
 	errCh := make(chan error, 5)
 	go func() {

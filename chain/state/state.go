@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/aperturerobotics/hydra/cid"
 	"github.com/aperturerobotics/inca"
-	"github.com/aperturerobotics/storageref"
 )
 
 // ChainStateSnapshot is an instance of the chain state.
@@ -19,7 +19,7 @@ type ChainStateSnapshot struct {
 	// LastBlockHeader is the last block header.
 	LastBlockHeader *inca.BlockHeader
 	// LastBlockRef is the reference to the last block.
-	LastBlockRef *storageref.StorageRef
+	LastBlockRef *cid.BlockRef
 	// CurrentProposer contains a reference to the computed current proposer if known.
 	CurrentProposer *inca.Validator
 	// RoundEndTime is the time when the round will end.

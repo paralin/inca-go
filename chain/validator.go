@@ -3,24 +3,20 @@ package chain
 import (
 	"bytes"
 	"context"
-	"errors"
-	"fmt"
 	"time"
 
 	"github.com/aperturerobotics/inca"
 	"github.com/aperturerobotics/inca-go/chain/state"
-	"github.com/aperturerobotics/inca-go/logctx"
 	"github.com/aperturerobotics/inca-go/peer"
 	ichain "github.com/aperturerobotics/inca/chain"
 
-	"github.com/aperturerobotics/objstore"
-	"github.com/aperturerobotics/objstore/db"
+	"github.com/aperturerobotics/hydra/cid"
+	hobject "github.com/aperturerobotics/hydra/object"
 	"github.com/aperturerobotics/pbobject"
-	"github.com/aperturerobotics/storageref"
 
+	lpeer "github.com/aperturerobotics/bifrost/peer"
 	"github.com/golang/protobuf/proto"
 	"github.com/libp2p/go-libp2p-crypto"
-	lpeer "github.com/libp2p/go-libp2p-peer"
 	"github.com/sirupsen/logrus"
 )
 
@@ -31,10 +27,9 @@ type Validator struct {
 	state       ichain.ValidatorState
 	ch          *Chain
 	le          *logrus.Entry
-	dbm         db.Db
+	store       hobject.ObjectStore
 	privKey     crypto.PrivKey
 	pubKeyBytes []byte
-	objStore    *objstore.ObjectStore
 
 	msgSender Node
 	peerStore *peer.PeerStore
@@ -43,25 +38,26 @@ type Validator struct {
 // NewValidator builds a new Validator.
 func NewValidator(
 	ctx context.Context,
+	le *logrus.Entry,
 	privKey crypto.PrivKey,
-	dbm db.Db,
+	store hobject.ObjectStore,
 	ch *Chain,
 	sender Node,
 	peerStore *peer.PeerStore,
 ) (*Validator, error) {
-	le := logctx.GetLogEntry(ctx).WithField("c", "validator")
+	le = le.WithField("c", "validator")
 	pid, err := lpeer.IDFromPrivateKey(privKey)
 	if err != nil {
 		return nil, err
 	}
 
-	dbm = db.WithPrefix(dbm, []byte(fmt.Sprintf("/validator/%s", pid.Pretty())))
+	store = hobject.NewPrefixer(store, "validator/"+pid.Pretty()+"/")
 	p := &Validator{
 		ctx:       ctx,
 		ch:        ch,
 		le:        le,
-		dbm:       dbm,
 		privKey:   privKey,
+		store:     store,
 		msgSender: sender,
 		peerStore: peerStore,
 	}
@@ -76,11 +72,6 @@ func NewValidator(
 		return nil, err
 	}
 
-	p.objStore = objstore.GetObjStore(ctx)
-	if p.objStore == nil {
-		return nil, errors.New("object store must be specified in ctx")
-	}
-
 	return p, nil
 }
 
@@ -88,7 +79,7 @@ func NewValidator(
 // Note: the state object must be allocated, and the ID set.
 // If the key does not exist nothing happens.
 func (p *Validator) readState(ctx context.Context) error {
-	dat, datOk, err := p.dbm.Get(ctx, []byte("/state"))
+	dat, datOk, err := p.store.GetObject("state")
 	if err != nil || !datOk {
 		return err
 	}
@@ -103,11 +94,14 @@ func (p *Validator) writeState(ctx context.Context) error {
 		return err
 	}
 
-	return p.dbm.Set(ctx, []byte("/state"), dat)
+	return p.store.SetObject("state", dat)
 }
 
 // makeVote makes a vote for the given state.
-func (p *Validator) makeVote(ctx context.Context, state *state.ChainStateSnapshot) (*storageref.StorageRef, error) {
+func (p *Validator) makeVote(
+	ctx context.Context,
+	state *state.ChainStateSnapshot,
+) (*cid.BlockRef, error) {
 	proposer := state.CurrentProposer
 	_, pubKey, err := proposer.ParsePeerID()
 	if err != nil {
@@ -122,7 +116,7 @@ func (p *Validator) makeVote(ctx context.Context, state *state.ChainStateSnapsho
 	msg, msgCancel := proposerPeer.SubscribeMessages()
 	defer msgCancel()
 
-	var blockHeaderRef *storageref.StorageRef
+	var blockHeaderRef *cid.BlockRef
 	var peerMsg *inca.NodeMessage
 	for {
 		select {
@@ -137,13 +131,7 @@ func (p *Validator) makeVote(ctx context.Context, state *state.ChainStateSnapsho
 
 		vote := &inca.Vote{}
 		voteRef := peerMsg.GetInnerRef()
-		encConf := p.ch.
-			GetEncryptionStrategy().
-			GetBlockEncryptionConfigWithDigest(voteRef.GetObjectDigest())
-		encCtx := pbobject.WithEncryptionConf(ctx, &encConf)
-		if err := voteRef.FollowRef(encCtx, nil, vote, nil); err != nil {
-			return nil, err
-		}
+		// TODO
 
 		blockHeaderRef = vote.GetBlockHeaderRef()
 		blockHeader := &inca.BlockHeader{}
@@ -171,7 +159,7 @@ func (p *Validator) makeVote(ctx context.Context, state *state.ChainStateSnapsho
 		break
 	}
 
-	var voteStorageRef *storageref.StorageRef
+	var voteStorageRef *cid.BlockRef
 	{
 		vote := &inca.Vote{BlockHeaderRef: blockHeaderRef}
 		{

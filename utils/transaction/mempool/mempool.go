@@ -5,9 +5,8 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/aperturerobotics/inca-go/node"
 	"github.com/aperturerobotics/inca-go/utils/transaction/txdb"
-	"github.com/aperturerobotics/objstore/db"
-	"github.com/aperturerobotics/objstore/dbds/fibheap"
 )
 
 // Mempool is an implementation of an In-Memory Queued Transaction Pool.
@@ -28,6 +27,9 @@ type Opts struct {
 	// Orderer controls the order transactions are processed.
 	// Default is earliest-first.
 	Orderer Orderer
+	// Node, if set, will indicate the mempool should subscribe to incoming
+	// transaction messages on the node.
+	Node *node.Node
 }
 
 // NewMempool constructs a mempool, loading state from the database.
@@ -53,12 +55,17 @@ func NewMempool(
 	}
 
 	m.orderer = orderer
+
+	if nod := mempoolOpts.Node; nod != nil {
+		go m.processIncomingMessages(ctx, nod)
+	}
+
 	return m, nil
 }
 
 // Enqueue adds a transaction from the database into the pool.
-func (m *Mempool) Enqueue(ctx context.Context, txID string) error {
-	prio, err := m.orderer(ctx, m.txDb, txID)
+func (m *Mempool) Enqueue(txID string) error {
+	prio, err := m.orderer(m.ctx, m.txDb, txID)
 	if err != nil {
 		return err
 	}
@@ -98,7 +105,7 @@ func (m *Mempool) CollectTransactions(
 		if txID != "" {
 			select {
 			case <-ctx.Done():
-				_ = m.Enqueue(m.ctx, txID)
+				_ = m.Enqueue(txID)
 				return ctx.Err()
 			case outCh <- txID:
 			}
@@ -124,4 +131,12 @@ func (m *Mempool) CollectTransactions(
 // GetTransactionDb returns the transaction database.
 func (m *Mempool) GetTransactionDb() *txdb.TxDatabase {
 	return m.txDb
+}
+
+// processIncomingMessages processes messages from a node.
+func (m *Mempool) processIncomingMessages(ctx context.Context, nod *node.Node) {
+	nod.
+	for {
+
+	}
 }

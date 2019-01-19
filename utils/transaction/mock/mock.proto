@@ -1,8 +1,6 @@
 syntax = "proto3";
 package mock;
 
-import "github.com/aperturerobotics/storageref/storageref.proto";
-
 // Transaction is a mock transaction.
 message Transaction {
   bytes inner_data = 1;

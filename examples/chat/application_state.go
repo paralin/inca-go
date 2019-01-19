@@ -3,24 +3,23 @@ package main
 import (
 	"context"
 
+	"github.com/aperturerobotics/hydra/cid"
 	"github.com/aperturerobotics/inca-go/utils/transaction"
-	"github.com/aperturerobotics/objstore"
-	"github.com/aperturerobotics/pbobject"
-	"github.com/aperturerobotics/storageref"
 	"github.com/golang/protobuf/proto"
 )
 
 // ChatVirtualState is a state handle that can be edited in memory and serialized.
 type ChatVirtualState struct {
 	state ChatState
+	ctx   context.Context
 }
 
 // getVirtualState returns the chat virtual state at the reference.
 func (c *Chat) getVirtualState(
 	ctx context.Context,
-	appState *storageref.StorageRef,
+	appState *cid.BlockRef,
 ) (*ChatVirtualState, error) {
-	vs := &ChatVirtualState{}
+	vs := &ChatVirtualState{ctx: c.ctx}
 	state := &vs.state
 	if err := appState.FollowRef(ctx, nil, state, nil); err != nil {
 		return nil, err
@@ -65,8 +64,8 @@ func (s *ChatVirtualState) Apply(
 
 // Serialize returns a state reference that can be used in a block.
 // If the state is already serialized, should return the same ref.
-func (s *ChatVirtualState) Serialize(ctx context.Context) (*storageref.StorageRef, error) {
-	encConf := pbobject.GetEncryptionConf(ctx)
+func (s *ChatVirtualState) Serialize(ctx context.Context) (*cid.BlockRef, error) {
+	encConf := pbobject.GetEncryptionConf(s.ctx)
 	if encConf == nil {
 		encConf = &pbobject.EncryptionConfig{}
 	}
@@ -87,8 +86,15 @@ func (c *Chat) readState(ctx context.Context) error {
 }
 
 // GetObjectTypeID returns the object type string, used to identify types.
-func (c *ChatState) GetObjectTypeID() *pbobject.ObjectTypeID {
+func (*ChatState) GetObjectTypeID() *pbobject.ObjectTypeID {
 	return &pbobject.ObjectTypeID{
 		TypeUuid: "/inca/example/chat/app-state",
+	}
+}
+
+// GetObjectTypeID returns the object type string, used to identify types.
+func (*ChatMessageElem) GetObjectTypeID() *pbobject.ObjectTypeID {
+	return &pbobject.ObjectTypeID{
+		TypeUuid: "/inca/example/chat/message/elem",
 	}
 }

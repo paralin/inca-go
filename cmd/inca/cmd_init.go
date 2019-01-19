@@ -42,17 +42,6 @@ func cmdInitCluster(p goprocess.Process) error {
 		return errors.Errorf("chain config already exists: %s", chainConfigPath)
 	}
 
-	le := logctx.GetLogEntry(rootContext)
-	objStore, err := GetObjectStore()
-	if err != nil {
-		return err
-	}
-
-	db, err := GetDb()
-	if err != nil {
-		return err
-	}
-
 	privKey, _, err := crypto.GenerateEd25519Key(rand.Reader)
 	if err != nil {
 		return err

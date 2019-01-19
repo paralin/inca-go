@@ -3,12 +3,10 @@ package main
 import (
 	"context"
 
+	"github.com/aperturerobotics/hydra/cid"
 	"github.com/aperturerobotics/inca-go/block"
 	"github.com/aperturerobotics/inca-go/chain/state"
 	"github.com/aperturerobotics/inca-go/logctx"
-	"github.com/aperturerobotics/objstore"
-	"github.com/aperturerobotics/pbobject"
-	"github.com/aperturerobotics/storageref"
 	"github.com/pkg/errors"
 )
 
@@ -22,7 +20,7 @@ func (p *Proposer) ProposeBlock(
 	ctx context.Context,
 	parentBlkInner *block.Block,
 	chainState *state.ChainStateSnapshot,
-) (*storageref.StorageRef, error) {
+) (*cid.BlockRef, error) {
 	ctx = pbobject.WithEncryptionConf(ctx, &p.encConf)
 	objStore := objstore.GetObjStore(ctx)
 	if objStore == nil {

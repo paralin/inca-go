@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/aperturerobotics/objstore/db"
+	"github.com/aperturerobotics/hydra/object"
 	"github.com/emirpasic/gods/containers"
 )
 
@@ -19,20 +19,20 @@ type Container interface {
 type DbContainer struct {
 	Container
 
-	db    db.Db
-	dbKey []byte
+	store object.ObjectStore
+	dbKey string
 }
 
 // NewDbContainer builds a new database-backed container.
 func NewDbContainer(
-	parentDB db.Db,
+	parentDB object.ObjectStore,
 	containerID string,
 	container Container,
 ) *DbContainer {
 	return &DbContainer{
 		Container: container,
-		db:        parentDB,
-		dbKey:     []byte(fmt.Sprintf("/dbcontainer/%s", containerID)),
+		store:     parentDB,
+		dbKey:     fmt.Sprintf("dbcontainer/%s", containerID),
 	}
 }
 
@@ -43,12 +43,12 @@ func (d *DbContainer) WriteState(ctx context.Context) error {
 		return err
 	}
 
-	return d.db.Set(ctx, d.dbKey, data)
+	return d.store.SetObject(d.dbKey, data)
 }
 
 // ReadState reads the container state from the db.
 func (d *DbContainer) ReadState(ctx context.Context) error {
-	data, dataOk, err := d.db.Get(ctx, d.dbKey)
+	data, dataOk, err := d.store.GetObject(d.dbKey)
 	if err != nil || !dataOk {
 		return err
 	}

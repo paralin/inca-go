@@ -3,9 +3,9 @@ package mempool
 import (
 	"context"
 
+	"github.com/aperturerobotics/hydra/cid"
 	"github.com/aperturerobotics/inca-go/block"
 	"github.com/aperturerobotics/inca-go/utils/transaction"
-	"github.com/aperturerobotics/storageref"
 )
 
 // Application manages state and transaction verification and processing.
@@ -33,5 +33,5 @@ type ApplicationState interface {
 	Apply(ctx context.Context, tx *transaction.Transaction) (sysErr bool, txErr error)
 	// Serialize returns a state reference that can be used in a block.
 	// If the state is already serialized, should return the same ref.
-	Serialize(ctx context.Context) (*storageref.StorageRef, error)
+	Serialize(ctx context.Context) (*cid.BlockRef, error)
 }

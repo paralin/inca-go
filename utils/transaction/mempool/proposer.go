@@ -4,13 +4,11 @@ import (
 	"context"
 	"time"
 
+	"github.com/aperturerobotics/hydra/cid"
 	"github.com/aperturerobotics/inca-go/block"
 	"github.com/aperturerobotics/inca-go/chain/state"
 	"github.com/aperturerobotics/inca-go/logctx"
 	"github.com/aperturerobotics/inca-go/utils/transaction"
-	"github.com/aperturerobotics/objstore"
-	"github.com/aperturerobotics/pbobject"
-	"github.com/aperturerobotics/storageref"
 	"github.com/pkg/errors"
 )
 
@@ -83,7 +81,7 @@ func (p *Proposer) ProposeBlock(
 	ctx context.Context,
 	parentBlk *block.Block,
 	chainState *state.ChainStateSnapshot,
-) (*storageref.StorageRef, error) {
+) (*cid.BlockRef, error) {
 	var collectCtx context.Context
 	var collectCtxCancel context.CancelFunc
 
@@ -153,7 +151,7 @@ func (p *Proposer) ProposeBlock(
 			if err != nil {
 				le.WithError(err).Warn("unable to lookup tx")
 				if err == context.Canceled || err == context.DeadlineExceeded {
-					_ = p.mempool.Enqueue(p.ctx, txID)
+					_ = p.mempool.Enqueue(txID)
 				}
 				continue
 			}
@@ -162,7 +160,7 @@ func (p *Proposer) ProposeBlock(
 			if txErr != nil {
 				if sysErr || txErr == context.Canceled || txErr == context.DeadlineExceeded {
 					errCh <- txErr
-					_ = p.mempool.Enqueue(p.ctx, txID)
+					_ = p.mempool.Enqueue(txID)
 					collectCtxCancel()
 				}
 				return
@@ -170,7 +168,7 @@ func (p *Proposer) ProposeBlock(
 
 			select {
 			case <-collectCtx.Done():
-				_ = p.mempool.Enqueue(p.ctx, txID)
+				_ = p.mempool.Enqueue(txID)
 				return
 			case resolvedTxs <- tx:
 			}
@@ -181,7 +179,7 @@ func (p *Proposer) ProposeBlock(
 	var appliedTxs []string
 	requeueTxs := func() {
 		for _, txID := range appliedTxs {
-			_ = p.mempool.Enqueue(p.ctx, txID)
+			_ = p.mempool.Enqueue(txID)
 		}
 	}
 
